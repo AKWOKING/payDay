@@ -1,0 +1,422 @@
+# PayDay — Complete Project Documentation
+
+## Executive Summary
+**EVERYDAY IS A PAYDAY**
+
+**PayDay — An Integrated e-Wallet for MTN Mobile Money, Orange Money and UBA Bank**
+*Republic of Cameroon | Document version 1.0 | August 2026*
+
+### The Opportunity
+Mobile money dominates day-to-day payments in Cameroon, with MTN Mobile Money and Orange Money serving the large majority of the market, while banks such as UBA continue to hold formal savings, salary, and business accounts. Most Cameroonian users and small businesses juggle two or three of these accounts at once, and moving value between them today means agent visits, successive transfer fees, and disconnected apps and USSD menus.
+
+### The Solution
+PayDay is a single, neutral e-wallet built around what the design documentation calls “the Triangle Model”: one central wallet with a direct, bidirectional connection to each of the three channels — MTN Mobile Money, Orange Money, and UBA. Every transaction is either a deposit (channel → wallet) or a withdrawal (wallet → channel); the three channels never need to talk to each other directly, because PayDay's wallet is always the intermediary and single source of truth for the user's balance.
+
+### Value Proposition
+PayDay unifies Cameroon's fragmented mobile-money landscape into a single wallet. Instead of juggling separate MTN Mobile Money, Orange Money, and UBA balances — each requiring agent visits, multiple transfer fees, and disconnected apps — users get one central wallet that deposits from and withdraws to all three channels directly. Money “lives in one place,” with a unified transaction history and simpler reconciliation, especially valuable for small businesses managing cash across providers. The transaction fee PayDay charges replaces, rather than adds to, the agent commissions and hop-by-hop transfer costs users already pay today — trading fragmented friction for one seamless, trustworthy financial hub.
+
+### Business Model
+PayDay earns a small fee on each deposit and/or withdrawal, mirroring the fee structure MTN and Orange already use for cash-in/cash-out. Costs are driven by four lines: API/integration fees paid to MTN, Orange, and UBA per transaction; cloud hosting and database infrastructure; SMS/notification delivery; and compliance and licensing costs tied to KYC/AML and electronic money regulation. PayDay does not custody funds directly — wallet balances are backed 1:1 by a pooled trust/float account held at a partner bank, keeping PayDay's own software layer focused purely on the ledger.
+
+### Competitive Advantage
+| Advantage | Why it matters |
+| :--- | :--- |
+| **Channel neutrality** | Not owned by MTN or Orange, so it has no incentive to lock users into a single network. |
+| **Bridges mobile money and formal banking** | Connects UBA (formal banking) with MTN and Orange (mobile money) — a harder problem than a mobile-money-only bridge. |
+| **Extensible “adapter” architecture** | New channels (Express Union, Afriland First Bank, etc.) are added as plug-ins, not rebuilds. |
+| **Built-in auditability** | Every balance change traces to one transaction record, supporting regulator and partner-bank trust. |
+| **Designed for the real device mix** | Degrades to a lightweight/USSD-friendly flow, not just a smartphone-only app. |
+
+---
+
+## System Analysis and Design Documentation
+**Prepared for:** Software / Product Team  
+**Region of deployment:** Republic of Cameroon  
+**Document version:** 1.0 | **Date:** August 2026
+
+### Table of Contents
+1. [Introduction](#1-introduction)
+2. [System Analysis](#2-system-analysis)
+3. [System Design](#3-system-design)
+4. [Security and Compliance Considerations](#4-security-and-compliance-considerations)
+5. [Recommended Technology Stack](#5-recommended-technology-stack)
+6. [Implementation Roadmap](#6-implementation-roadmap)
+7. [Conclusion](#7-conclusion)
+
+---
+
+### 1. Introduction
+
+#### 1.1 Background
+Mobile money has become the dominant channel for digital financial transactions in Cameroon. MTN Mobile Money (MoMo) and Orange Money together serve the overwhelming majority of the mobile-financial-services market, while traditional banks such as United Bank for Africa (UBA) continue to hold formal savings, salary, and business accounts. In practice, a typical Cameroonian consumer or small business today juggles at least two or three of these accounts separately: a mobile money wallet for daily transactions, a bank account for salary and savings, and often a second mobile money wallet on the rival network because friends, family, or business partners use a different operator.
+
+This fragmentation creates friction: transferring value from a bank account to a mobile money wallet (or between the two mobile money operators) usually requires visiting an agent, paying successive transfer fees, or navigating separate USSD menus and apps that do not talk to each other.
+
+PayDay is proposed as a simple, unifying e-banking application that gives every user one central in-app wallet, and lets that wallet send and receive funds with all three channels — MTN Mobile Money, Orange Money, and UBA — directly. Because the wallet sits at the centre of exactly three external relationships, the system's core money-movement model is described in this document as “the Triangle”: the wallet forms one point that connects outward to MTN, Orange, and UBA, and each of those connections is bidirectional (deposit into the wallet, or withdraw out of the wallet, on any of the three channels).
+
+#### 1.2 Problem Statement
+Cameroonian users currently lack a single, neutral application that allows them to consolidate and move money freely between MTN Mobile Money, Orange Money, and a bank account (UBA), without relying on physical agents, manual cash-out/cash-in cycles, or multiple disconnected apps. This slows down transactions, increases transfer costs, and makes it difficult for individuals and small businesses to track their overall balance across providers.
+
+#### 1.3 Aim and Objectives
+The aim of this project is to design and document a simple, secure e-wallet system that interoperates with MTN Mobile Money, Orange Money, and UBA, allowing users to store, send, and receive money through a single application.
+
+**Specific objectives:**
+* Provide users with a central digital wallet where money can be stored and managed.
+* Allow users to fund (deposit into) the wallet from MTN Mobile Money, Orange Money, or UBA.
+* Allow users to withdraw money from the wallet back out to MTN Mobile Money, Orange Money, or UBA.
+* Maintain an accurate, auditable ledger of every transaction across all three channels.
+* Apply strong authentication (PIN/OTP) and basic KYC to protect user funds.
+* Keep the first version (v1) of the system intentionally simple: one wallet, three channels, deposit and withdrawal only — leaving wallet-to-wallet transfers between different users, bill payments, and merchant payments for later phases.
+
+#### 1.4 Scope and Limitations
+**In scope (Version 1 — the Triangle model)**
+* A single-currency (XAF) in-app wallet per registered user.
+* Deposit (cash-in) from MTN MoMo, Orange Money, or UBA into the wallet.
+* Withdrawal (cash-out) from the wallet to MTN MoMo, Orange Money, or UBA.
+* User registration with basic KYC (ID document, phone number verification).
+* Transaction history, receipts and notifications.
+* An administrative back-office for monitoring, reconciliation, and reporting.
+
+**Out of scope for Version 1 (future phases)**
+* Wallet-to-wallet transfers between two different PayDay users.
+* Bill payments, airtime purchase, and merchant/QR payments.
+* Multi-currency support and cross-border transfers.
+* Loans, savings products, or interest-bearing balances.
+
+*Keeping the scope to “one wallet, three channels, two directions” (deposit and withdraw) is a deliberate design decision to keep the first release simple, testable, and easy to reconcile before more complex features are added.*
+
+---
+
+### 2. System Analysis
+
+#### 2.1 Methodology
+This documentation follows a structured System Development Life Cycle (SDLC) approach, specifically a lightweight Structured Systems Analysis and Design Method (SSADM)-style process: (1) requirements gathering, (2) feasibility study, (3) process modelling using use case diagrams and data flow diagrams (DFDs), and (4) design of the architecture, database, and process/sequence flows. This approach was chosen because the three external integrations (MTN, Orange, UBA) are well-defined, transaction-based interfaces, which are naturally suited to structured, process-oriented modelling rather than a purely object-oriented approach.
+
+#### 2.2 Requirement Analysis
+##### 2.2.1 Functional Requirements
+| ID | Requirement | Priority |
+| :--- | :--- | :--- |
+| FR-01 | The system shall allow a new user to register using their name, phone number, email, and a government ID for KYC. | High |
+| FR-02 | The system shall allow a registered user to log in securely (password + OTP or biometric). | High |
+| FR-03 | The system shall provide each user with exactly one central wallet, created automatically at registration. | High |
+| FR-04 | The system shall allow a user to fund the wallet by initiating a deposit from MTN MoMo. | High |
+| FR-05 | The system shall allow a user to fund the wallet by initiating a deposit from Orange Money. | High |
+| FR-06 | The system shall allow a user to fund the wallet by initiating a deposit from a UBA account. | High |
+| FR-07 | The system shall allow a user to withdraw from the wallet to MTN MoMo, Orange Money, or UBA. | High |
+| FR-08 | The system shall require a transaction PIN or OTP confirmation for every deposit and withdrawal. | High |
+| FR-09 | The system shall update the wallet balance only after a channel confirms success (via callback/webhook). | High |
+| FR-10 | The system shall record every transaction with amount, channel, direction, fee, status, and timestamp. | High |
+| FR-11 | The system shall notify the user (SMS and/or push) after every completed or failed transaction. | Medium |
+| FR-12 | The system shall allow the user to view a paginated transaction history and download a receipt. | Medium |
+| FR-13 | The system shall allow an administrator to view, filter, and reconcile transactions across all three channels. | Medium |
+| FR-14 | The system shall automatically reverse (roll back) a wallet debit if a withdrawal to an external channel fails. | High |
+
+##### 2.2.2 Non-Functional Requirements
+| ID | Requirement | Detail |
+| :--- | :--- | :--- |
+| NFR-01 | **Security** | All traffic over TLS 1.2+; sensitive data (PIN, ID numbers) encrypted at rest (AES-256); passwords hashed with bcrypt/argon2. |
+| NFR-02 | **Availability** | Target 99.5% uptime for the core wallet and API gateway; channel outages must degrade gracefully (queue & retry). |
+| NFR-03 | **Performance** | 95% of deposit/withdraw requests should receive an initial acknowledgement within 3 seconds; final confirmation depends on the external channel. |
+| NFR-04 | **Auditability** | Every balance change must be traceable to exactly one transaction record; no direct balance edits outside the ledger service. |
+| NFR-05 | **Compliance** | Alignment with BEAC/COBAC electronic money regulations and each partner's (MTN, Orange, UBA) API terms of use and KYC/AML rules. |
+| NFR-06 | **Usability** | Simple, three-step flow (choose channel → enter amount → confirm PIN) usable by first-time smartphone users; app should also degrade to a lightweight/USSD-friendly flow where feasible. |
+| NFR-07 | **Scalability** | Stateless application servers behind a load balancer so capacity can grow horizontally as users increase. |
+
+#### 2.3 Feasibility Study
+**Technical feasibility**
+MTN Mobile Money exposes a Collections and Disbursements REST API (MoMo API), Orange Money exposes a Web Payment / Orange Money API, and UBA offers corporate/API banking integration (direct API partnership or an aggregator such as a licensed payment service provider). All three support server-to-server callbacks/webhooks, which the proposed architecture relies on to confirm transactions asynchronously. This is technically feasible using standard REST/JSON integration patterns.
+
+**Operational and regulatory feasibility**
+Because PayDay would hold customer funds (even briefly, in the wallet), it must operate either as a licensed Electronic Money Institution (EMI) under COBAC/BEAC regulations, or in partnership with a licensed bank or EMI that holds the pooled float account on the system's behalf. This documentation assumes the latter, safer path for a first version: PayDay's own wallet balances are backed 1:1 by a pooled trust/float account held at a partner bank (which could be UBA itself), while PayDay's software layer only manages the ledger, not the actual custody of funds.
+
+**Economic feasibility**
+Costs are primarily: (a) integration/API fees charged by MTN, Orange and UBA per transaction, (b) cloud hosting and database costs, (c) SMS/notification gateway costs, and (d) compliance/licensing costs. Revenue can come from a small transaction fee on deposits and/or withdrawals, similar to existing mobile money cash-in/cash-out fee structures.
+
+#### 2.4 Use Case Analysis
+The core actors are the Customer (registered wallet user), the System Administrator, and the three external systems (MTN MoMo API, Orange Money API, UBA API), which are treated as actors from the perspective of the wallet system because they are systems outside PayDay's control.
+
+*Figure 1: Use Case Diagram — PayDay*
+
+##### 2.4.1 Use case descriptions (key cases)
+| Use Case | Actor(s) | Description | Pre-condition |
+| :--- | :--- | :--- | :--- |
+| **Fund Wallet** | Customer, MTN/Orange/UBA API | User selects a channel and amount; system requests a collection from that channel and credits the wallet once confirmed. | User is logged in and KYC-verified. |
+| **Withdraw from Wallet** | Customer, MTN/Orange/UBA API | User selects a channel and amount; system debits the wallet (pending) and requests a disbursement to that channel. | Sufficient wallet balance; PIN set. |
+| **View Transaction History** | Customer | User views a chronological list of deposits and withdrawals with status. | User is logged in. |
+| **Manage Users & Limits** | Administrator | Admin views/suspends accounts, sets daily/monthly transaction limits. | Admin authenticated. |
+| **Monitor & Reconcile** | Administrator | Admin compares PayDay's ledger against each channel's settlement report to detect mismatches. | Settlement files/reports available. |
+
+#### 2.5 Data Flow Diagrams
+##### 2.5.1 Context Diagram (Level 0)
+The context diagram treats the entire PayDay system as a single process and shows how data flows between it and each external entity: the Customer, the Administrator, and the three payment channels.
+
+*Figure 2: Level-0 (Context) Data Flow Diagram*
+
+##### 2.5.2 Level-1 Data Flow Diagram
+The level-1 diagram decomposes the system into its four core processes: authentication/KYC, fund/withdraw processing, wallet ledger update, and reconciliation/notification — together with the data stores each process reads or writes.
+
+*Figure 3: Level-1 Data Flow Diagram*
+
+---
+
+### 3. System Design
+
+#### 3.1 The Triangle Model — Design Concept
+At the heart of PayDay's design is a deliberately simple topology: one central wallet with exactly three bidirectional relationships. This is illustrated below as a triangle, with the wallet as the anchor point and each payment channel as a vertex. Every transaction in the system is either money flowing inward (deposit, channel → wallet) or outward (withdrawal, wallet → channel) along one edge of the triangle. No direct edges exist between the three channels themselves — MTN, Orange and UBA never talk to each other directly; the wallet is always the intermediary and the single source of truth for the user's balance.
+
+*Figure 4: The Triangle Model — Wallet at the centre of three payment channels*
+
+This design keeps reconciliation simple (every movement of money is wallet-centred), keeps the mental model simple for users (“my money lives in one place”), and keeps the codebase simple because a single Transaction Manager module can treat MTN, Orange, and UBA as interchangeable “channel adapters” that implement the same two operations: initiate collection (deposit) and initiate disbursement (withdrawal).
+
+#### 3.2 System Architecture
+PayDay follows a layered, service-oriented architecture. The mobile/web client talks only to PayDay's own API Gateway; it never talks directly to MTN, Orange, or UBA. All three external integrations are isolated behind channel adapters inside the Transaction Manager, so that adding a fourth channel in future (e.g., Express Union, Afriland First Bank) means writing one new adapter rather than changing the core wallet logic.
+
+*Figure 5: High-Level System Architecture*
+
+**Architectural layers**
+| Layer | Responsibility |
+| :--- | :--- |
+| **Client (Mobile App / USSD)** | User interface for registration, login, fund/withdraw requests, balance & history. |
+| **API Gateway** | Single entry point; TLS termination, rate limiting, request routing, JWT/session validation. |
+| **Security Layer** | Authentication, OTP/PIN verification, KYC checks, encryption of sensitive fields, fraud rules. |
+| **Wallet Engine** | Owns the wallet balance; the only component permitted to credit/debit a wallet, always via a transaction record. |
+| **Transaction Manager** | Orchestrates deposit/withdraw requests; contains one channel adapter per external partner (MTN, Orange, UBA); handles retries, timeouts, and reversals. |
+| **Database** | Persistent store for users, wallets, linked accounts, transactions, and notifications (see Section 3.3). |
+
+#### 3.3 Database Design
+The data model is intentionally normalized around five entities: User, Wallet, Linked External Account (the user's MTN/Orange/UBA identifiers), Transaction, and Notification. Every wallet balance change must originate from a Transaction row — this is what makes the ledger auditable.
+
+*Figure 6: Entity-Relationship Diagram*
+
+##### 3.3.1 Data dictionary — key tables
+| Table | Key Fields |
+| :--- | :--- |
+| **User** | user_id (PK), phone_number (unique), email, id_document_no, kyc_status |
+| **Wallet** | wallet_id (PK), user_id (FK), balance, currency, status |
+| **Linked_External_Account** | linked_account_id (PK), user_id (FK), provider [MTN/ORANGE/UBA], account_number/msisdn, is_verified |
+| **Transaction** | transaction_id (PK), wallet_id (FK), linked_account_id (FK), type [DEPOSIT/WITHDRAW], channel, amount, fee, status [PENDING/SUCCESS/FAILED/REVERSED], external_ref |
+| **Notification** | notification_id (PK), user_id (FK), transaction_id (FK), channel [SMS/PUSH], message, sent_at |
+
+#### 3.4 Process Design — Transaction Sequence Flows
+The two core money-movement operations — fund (deposit) and withdraw — follow the same generic pattern regardless of which of the three channels is used, which is the practical benefit of the Triangle model: the sequence below applies identically whether the channel is MTN Mobile Money, Orange Money, or UBA, with only the channel adapter changing underneath.
+
+*Figure 7: Sequence Diagram — Fund Wallet (Deposit)*
+*Figure 8: Sequence Diagram — Withdraw from Wallet*
+
+##### 3.4.1 Transaction state machine
+Every transaction moves through a small, well-defined set of states, which keeps reconciliation predictable:
+* **PENDING** — created when the user submits a request; wallet funds are held (for withdrawals) but not yet finalised.
+* **PROCESSING** — sent to the external channel; awaiting its callback/webhook.
+* **SUCCESS** — channel confirmed completion; wallet ledger is finalised (credited for deposits, permanently debited for withdrawals).
+* **FAILED** — channel rejected or timed out; any held funds are released back to the wallet automatically.
+* **REVERSED** — a SUCCESS transaction that was later reversed (e.g., disputed or duplicate), always via a new offsetting transaction, never by editing history.
+
+#### 3.5 Interface / API Design
+PayDay exposes a small, consistent internal REST API to its own mobile client, and consumes three external partner APIs through channel adapters.
+
+##### 3.5.1 Internal API (client-facing)
+| Endpoint | Method | Purpose |
+| :--- | :--- | :--- |
+| `/auth/register` | POST | Create a new user and KYC record; auto-creates the wallet. |
+| `/auth/login` | POST | Authenticate and issue a session token (plus OTP step if enabled). |
+| `/wallet/balance` | GET | Return the current wallet balance. |
+| `/wallet/deposit` | POST | Initiate a deposit from a chosen channel (MTN / Orange / UBA). |
+| `/wallet/withdraw` | POST | Initiate a withdrawal to a chosen channel. |
+| `/wallet/transactions` | GET | Paginated transaction history. |
+| `/webhooks/mtn` | POST | Callback endpoint for MTN MoMo payment/disbursement confirmations. |
+| `/webhooks/orange` | POST | Callback endpoint for Orange Money confirmations. |
+| `/webhooks/uba` | POST | Callback endpoint for UBA transaction confirmations. |
+
+##### 3.5.2 External channel adapters
+| Channel | Typical integration Deposit (collection) operation | Typical integration Withdrawal (disbursement) operation |
+| :--- | :--- | :--- |
+| **MTN Mobile Money** | MTN MoMo API (Collections & Disbursements, OAuth2 + API key/subscription key) — Request to Pay prompts the customer to approve via MoMo USSD/PIN. | Transfer — disburses from MTN's disbursement account to the customer's MoMo number. |
+| **Orange Money** | Orange Money Web Payment / Orange Developer API — Web Payment initiation, customer confirms via Orange Money PIN prompt. | Merchant/aggregator payout API — credits the customer's Orange Money account. |
+| **UBA** | UBA corporate/API banking channel (direct partnership or licensed aggregator) — Direct debit / account-to-account transfer request against the linked UBA account. | Bank transfer / credit instruction to the linked UBA account. |
+
+---
+
+### 4. Security and Compliance Considerations
+* **KYC at registration:** full name, phone number, and a valid national ID or passport number, in line with COBAC/BEAC electronic money and AML/CFT requirements.
+* **Second-factor authentication:** Every deposit and withdrawal requires a second factor: transaction PIN (stored as a hash, never in plaintext) and/or one-time password (OTP) sent by SMS.
+* **Encryption in transit and at rest:** All client-server and server-to-partner traffic uses TLS 1.2 or higher; partner webhook payloads are verified using signatures/HMAC where the partner API supports it.
+* **Data protection:** Sensitive fields (ID numbers, linked account numbers) are encrypted at rest; passwords and PINs are hashed with a strong algorithm (bcrypt or argon2).
+* **Limits:** Daily and monthly transaction limits per user, configurable by the administrator, to contain fraud exposure and align with e-money regulatory ceilings.
+* **Audit logging:** Full audit logging: every state change on a transaction is logged with actor, timestamp, and reason, supporting dispute resolution and regulator reporting.
+* **Fund segregation:** Segregation of duties: the wallet's pooled funds should sit in a trust/float account at a licensed bank, reconciled daily against the sum of all wallet balances in the ledger.
+
+---
+
+### 5. Recommended Technology Stack
+| Layer | Suggested Technology | Rationale |
+| :--- | :--- | :--- |
+| **Mobile client** | Flutter (Android-first, given local device usage patterns) | Single codebase for Android/iOS; matches prior Flutter experience and Cameroon's largely Android user base. |
+| **Backend API** | Node.js (Express/NestJS) or Python (Flask/FastAPI) | Mature ecosystems for REST APIs and webhook handling; large community support for MTN/Orange API integration examples. |
+| **Database** | PostgreSQL or MySQL | ACID-compliant relational database, essential for a financial ledger. |
+| **Messaging/Queue** | Redis or RabbitMQ | Buffers and retries deposit/withdraw requests to external channels; smooths out API rate limits and timeouts. |
+| **Notifications** | SMS gateway (local aggregator) + Firebase Cloud Messaging | Reaches users even on basic phones (SMS) and provides rich push notifications on smartphones. |
+| **Hosting** | Cloud VPS or PaaS with data residency consideration | Should account for Cameroonian/COBAC data handling expectations where applicable. |
+
+---
+
+### 6. Implementation Roadmap
+| Phase | Milestone | Duration (indicative) |
+| :--- | :--- | :--- |
+| **Phase 1** | Core wallet, registration/KYC, database & security layer | 3–4 weeks |
+| **Phase 2** | MTN MoMo adapter (deposit & withdraw) + sandbox testing | 2–3 weeks |
+| **Phase 3** | Orange Money adapter (deposit & withdraw) + sandbox testing | 2–3 weeks |
+| **Phase 4** | UBA adapter (deposit & withdraw) + sandbox testing | 2–4 weeks (subject to partner onboarding) |
+| **Phase 5** | Reconciliation, admin back-office, notifications, and reporting | 2 weeks |
+| **Phase 6** | Pilot with a small user group, then production rollout | 3–4 weeks |
+
+---
+
+### 7. Conclusion
+PayDay's Triangle model — one central wallet, three interoperable payment channels, two clear directions of money movement — provides a deliberately simple but extensible foundation for an e-banking application in the Cameroonian context. By isolating MTN Mobile Money, Orange Money, and UBA behind uniform channel adapters, and by treating every balance change as an auditable transaction, the system stays simple to build and reason about in version 1, while leaving a clear path to add wallet-to-wallet transfers, bill payments, and additional channels in future phases.
+
+---
+---
+
+## Database Documentation (Version 1 Detail)
+**EVERYDAY IS A PAYDAY**  
+*Document version 1.0 | August 2026*
+
+### 1. Overview
+PayDay's data model is intentionally normalized around five core entities: User, Wallet, Linked External Account, Transaction, and Notification. The guiding design principle is that the wallet balance is never edited directly — every change to a Wallet.balance must originate from a Transaction record. This makes the ledger fully auditable: at any point, a wallet's balance can be independently recomputed and verified from the sum of its successful transactions.
+
+Version 1 links each user's wallet to two possible external channels — MTN Mobile Money and Orange Money. The schema is designed so that adding a further channel (such as UBA in a later phase) requires only a new value in the provider enumeration and a corresponding channel adapter, not a change to the core tables.
+
+### 2. Entity Relationships
+| Relationship | Cardinality | Description |
+| :--- | :--- | :--- |
+| User → Wallet | 1 : 1 | Each user has exactly one central wallet, created automatically at registration. |
+| User → Linked_External_Account | 1 : N | A user may link both an MTN and an Orange account (up to one per provider recommended). |
+| Wallet → Transaction | 1 : N | A wallet has many transactions over time; the balance is always the sum of SUCCESS transactions. |
+| Linked_External_Account → Transaction | 1 : N | Each transaction references exactly one external account as its counterpart channel. |
+| User → Notification | 1 : N | A user receives many notifications over time. |
+| Transaction → Notification | 1 : N | A transaction may trigger one or more notifications (e.g., SMS and push for the same event). |
+
+### 3. Table Definitions
+
+#### 3.1 User
+Stores each registered user's profile, credentials, and KYC status.
+| Field | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `user_id` | UUID / BIGINT | PK | Unique identifier for the user. |
+| `full_name` | VARCHAR(120) | NOT NULL | User's full legal name, as captured at registration. |
+| `phone_number` | VARCHAR(20) | UNIQUE, NOT NULL | Primary identifier for login and channel matching (MSISDN). |
+| `email` | VARCHAR(120) | UNIQUE, NULLABLE | Optional email for receipts and account recovery. |
+| `password_hash` | VARCHAR(255) | NOT NULL | Bcrypt/argon2 hash — never stored in plaintext. |
+| `pin_hash` | VARCHAR(255) | NULLABLE | Hashed transaction PIN, set after registration. |
+| `id_document_no` | VARCHAR(50) | NOT NULL | National ID or passport number, used for KYC. |
+| `kyc_status` | ENUM | NOT NULL, DEFAULT 'PENDING' | PENDING / VERIFIED / REJECTED. |
+| `status` | ENUM | NOT NULL, DEFAULT 'ACTIVE' | ACTIVE / SUSPENDED / CLOSED. |
+| `created_at` | TIMESTAMP | NOT NULL | Account creation time. |
+| `updated_at` | TIMESTAMP | NOT NULL | Last profile update time. |
+
+#### 3.2 Wallet
+The central wallet record. Exactly one wallet exists per user, and it is the single source of truth for the user's balance.
+| Field | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `wallet_id` | UUID / BIGINT | PK | Unique identifier for the wallet. |
+| `user_id` | UUID / BIGINT | FK → User.user_id, UNIQUE | One wallet per user (1:1 relationship). |
+| `balance` | DECIMAL(14,2) | NOT NULL, DEFAULT 0.00 | Current wallet balance. Never edited directly — only via a Transaction. |
+| `currency` | CHAR(3) | NOT NULL, DEFAULT 'XAF' | ISO currency code; single-currency in Version 1. |
+| `status` | ENUM | NOT NULL, DEFAULT 'ACTIVE' | ACTIVE / FROZEN / CLOSED. |
+| `daily_limit` | DECIMAL(14,2) | NOT NULL | Admin-configurable daily transaction ceiling. |
+| `monthly_limit` | DECIMAL(14,2) | NOT NULL | Admin-configurable monthly transaction ceiling. |
+| `created_at` | TIMESTAMP | NOT NULL | Wallet creation time (auto-created at registration). |
+| `updated_at` | TIMESTAMP | NOT NULL | Last balance/status update time. |
+
+#### 3.3 Linked External Account
+Represents a user's MTN or Orange account, linked to their PayDay wallet so it can be used as a source or destination for transactions.
+| Field | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `linked_account_id` | UUID / BIGINT | PK | Unique identifier for the linked external account. |
+| `user_id` | UUID / BIGINT | FK → User.user_id | Owner of this linked account. |
+| `provider` | ENUM | NOT NULL | MTN / ORANGE (UBA reserved for a future version). |
+| `account_identifier` | VARCHAR(30) | NOT NULL | MSISDN or account number on the external provider's system. |
+| `is_verified` | BOOLEAN | NOT NULL, DEFAULT FALSE | Whether ownership of the external account has been confirmed. |
+| `is_default` | BOOLEAN | NOT NULL, DEFAULT FALSE | Whether this is the user's default channel for that provider. |
+| `created_at` | TIMESTAMP | NOT NULL | Date the account was linked. |
+
+#### 3.4 Transaction
+The heart of the data model — every deposit or withdrawal is recorded here, and this table is the sole authority for wallet balance changes.
+| Field | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `transaction_id` | UUID / BIGINT | PK | Unique identifier for the transaction. |
+| `wallet_id` | UUID / BIGINT | FK → Wallet.wallet_id | Wallet affected by this transaction. |
+| `linked_account_id` | UUID / BIGINT | FK → Linked_External_Account.linked_account_id | External account used as the source or destination. |
+| `type` | ENUM | NOT NULL | DEPOSIT / WITHDRAW. |
+| `channel` | ENUM | NOT NULL | MTN / ORANGE. |
+| `amount` | DECIMAL(14,2) | NOT NULL | Transaction amount, excluding fee. |
+| `fee` | DECIMAL(14,2) | NOT NULL, DEFAULT 0.00 | Fee charged by PayDay for this transaction. |
+| `status` | ENUM | NOT NULL, DEFAULT 'PENDING' | PENDING / PROCESSING / SUCCESS / FAILED / REVERSED. |
+| `external_ref` | VARCHAR(100) | NULLABLE | Reference/ID returned by the MTN or Orange API for reconciliation. |
+| `failure_reason` | VARCHAR(255) | NULLABLE | Populated when status = FAILED. |
+| `created_at` | TIMESTAMP | NOT NULL | Time the transaction was initiated. |
+| `completed_at` | TIMESTAMP | NULLABLE | Time the transaction reached a final state (SUCCESS/FAILED/REVERSED). |
+
+#### 3.5 Notification
+Records every SMS or push notification sent to a user, primarily transaction confirmations and alerts.
+| Field | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `notification_id` | UUID / BIGINT | PK | Unique identifier for the notification. |
+| `user_id` | UUID / BIGINT | FK → User.user_id | Recipient of the notification. |
+| `transaction_id` | UUID / BIGINT | FK → Transaction.transaction_id, NULLABLE | Related transaction, where applicable. |
+| `channel` | ENUM | NOT NULL | SMS / PUSH. |
+| `message` | VARCHAR(255) | NOT NULL | Notification content sent to the user. |
+| `status` | ENUM | NOT NULL, DEFAULT 'PENDING' | PENDING / SENT / FAILED. |
+| `sent_at` | TIMESTAMP | NULLABLE | Time the notification was dispatched. |
+
+### 4. Data Integrity Rules
+* The `Wallet.balance` column is never updated directly by application code outside the Wallet Engine — every change must originate from a Transaction row moving to status = `SUCCESS`.
+* A withdrawal places a hold on funds at status = `PENDING`/`PROCESSING`; if the external channel fails or times out, the system automatically creates a reversal and releases the hold — history is never edited or deleted.
+* `external_ref` is required before a transaction can move to `SUCCESS`, so every wallet-affecting event is traceable back to MTN's or Orange's own transaction record for reconciliation.
+* Foreign keys enforce that a transaction cannot exist without a valid wallet and a valid linked external account, preventing orphaned financial records.
+* `kyc_status` must be `VERIFIED` before a user's wallet can send or receive any transaction above a minimal threshold (admin-configurable).
+
+---
+---
+
+## Work Plan: Developer 1 (Backend)
+**EVERYDAY IS A PAYDAY**  
+**VERSION 1 DEVELOPMENT PLAN**  
+*Team of 3 | 8-Week Delivery Plan | August 2026*
+
+### 1. Project Scope (Version 1)
+Version 1 of PayDay is scoped to the app wallet plus two payment channels only: MTN Mobile Money and Orange Money. UBA and any further channels are deferred to a later phase. This keeps the first release small enough for a 3-person team to deliver within 8 weeks, while still proving the core Triangle-model concept: one wallet, funded from and withdrawable to more than one channel.
+
+### 2. Your Role
+Developer 1 is responsible for: **Backend & Integrations (Database, Wallet Engine, MTN & Orange Adapters, Admin Logic).**
+* Database design (User, Wallet, Transaction, Notification)
+* Wallet engine — the only component that credits/debits a wallet
+* Transaction Manager — deposit/withdraw orchestration and state machine
+* MTN Mobile Money adapter (API integration + webhook)
+* Orange Money adapter (API integration + webhook)
+* Authentication, PIN/OTP, KYC verification logic
+* Internal REST API consumed by the app
+* Admin back-office logic (user management, reconciliation, reporting)
+
+### 3. Your Sprint-by-Sprint Plan
+Below is your complete task breakdown across all four sprints of the 8-week delivery plan.
+
+| Sprint | Your tasks |
+| :--- | :--- |
+| **Weeks 1–2 — Foundations** | • Design the database schema: User, Wallet, Transaction, Notification tables<br>• Build authentication endpoints (login, session/JWT)<br>• Build KYC endpoints (submit ID document, verification status)<br>• Build the wallet engine skeleton — the only component allowed to credit/debit a wallet |
+| **Weeks 3–4 — First channel live** | • Build the Transaction Manager and its state machine (PENDING → PROCESSING → SUCCESS/FAILED/REVERSED)<br>• Build the internal API: deposit, withdraw, balance, transaction history endpoints<br>• Build the MTN Mobile Money adapter (API integration)<br>• Build and test the MTN webhook (payment confirmation callback), end-to-end with Developer 2's UI |
+| **Weeks 5–6 — Second channel + admin** | • Build the Orange Money adapter (API integration) and its webhook, end-to-end<br>• Build admin back-office logic: user management, transaction monitoring, reconciliation<br>• Build the SMS/push notification service (transaction confirmations, alerts) |
+| **Weeks 7–8 — Harden & pilot** | • Handle edge cases: timeouts, duplicate webhook callbacks, insufficient balance, failed disbursement reversal<br>• Run a security review: TLS, PIN/OTP hashing, encrypted sensitive fields<br>• Fix bugs surfaced by QA during the pilot<br>• Support the pilot from the backend side — monitor transactions and reconciliation in real time |
+
+### 4. Key Project Milestones
+These are the shared checkpoints for the whole team — useful context for how your work fits into the overall delivery.
+* **End of Week 2:** Backend foundation and app scaffold in place; MTN and Orange sandbox access requested.
+* **End of Week 4:** MTN Mobile Money fully working end-to-end (deposit and withdrawal) in the app.
+* **End of Week 6:** Orange Money fully working end-to-end; admin back-office functional; pilot materials ready.
+* **End of Week 8:** Both channels hardened and tested; pilot run completed with a written report.
+
+### 5. Dependencies & Coordination
+Developer 1's work is the foundation the other two depend on: Developer 2 needs the internal API live to wire up screens, and Operations needs working transaction flows to run meaningful QA and the pilot. MTN and Orange sandbox credentials (secured by Operations) are required before the channel adapters in Weeks 3–6 can be tested.
+
+### 6. Notes
+Because UBA is out of scope for Version 1, the team has no external bank-partnership dependency on this timeline. Please flag any blocker on your tasks as early as possible so the rest of the team can adjust — the plan assumes each sprint's work is available for the next person to build on.
