@@ -15,23 +15,22 @@ from payday.core.config import settings
 from payday.core.database import Base
 from payday.models import *  # Import all models to register with Base.metadata
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
 config = context.config
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# add your model's MetaData object here
-# for 'autogenerate' support
 target_metadata = Base.metadata
+
+
+def get_db_url() -> str:
+    url = os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url") or settings.DATABASE_URL
+    return url
 
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
-    url = settings.DATABASE_URL
+    url = get_db_url()
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -55,7 +54,8 @@ async def run_async_migrations() -> None:
     and associate a connection with the context.
     """
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = settings.DATABASE_URL
+    url = get_db_url()
+    configuration["sqlalchemy.url"] = url
 
     connectable = async_engine_from_config(
         configuration,
