@@ -2,6 +2,7 @@ from payday.services.audit_service import audit_service, AuditService
 from payday.services.kyc_service import kyc_service, KycService
 from payday.services.wallet_engine import wallet_engine, WalletEngine
 from payday.services.auth_service import auth_service, AuthService
+from payday.services.transaction_manager import transaction_manager, TransactionManager
 
 __all__ = [
     "audit_service",
@@ -12,4 +13,6 @@ __all__ = [
     "WalletEngine",
     "auth_service",
     "AuthService",
+    "transaction_manager",
+    "TransactionManager",
 ]

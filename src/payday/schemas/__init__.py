@@ -21,6 +21,13 @@ from payday.schemas.public import (
     FeeCalculatorResponse,
     PublicStatusResponse,
 )
+from payday.schemas.transaction import (
+    DepositInitiateRequest,
+    WithdrawInitiateRequest,
+    TransactionResponse,
+    TransactionReceiptResponse,
+    WebhookCallbackPayload,
+)
 
 __all__ = [
     "ProblemDetail",
@@ -46,4 +53,9 @@ __all__ = [
     "FeeCalculatorRequest",
     "FeeCalculatorResponse",
     "PublicStatusResponse",
+    "DepositInitiateRequest",
+    "WithdrawInitiateRequest",
+    "TransactionResponse",
+    "TransactionReceiptResponse",
+    "WebhookCallbackPayload",
 ]

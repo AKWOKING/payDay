@@ -26,7 +26,7 @@ class PayDayException(HTTPException):
             status.HTTP_403_FORBIDDEN: "Forbidden",
             status.HTTP_404_NOT_FOUND: "Not Found",
             status.HTTP_409_CONFLICT: "Conflict",
-            status.HTTP_422_UNPROCESSABLE_ENTITY: "Unprocessable Entity",
+            422: "Unprocessable Content",
             status.HTTP_500_INTERNAL_SERVER_ERROR: "Internal Server Error",
         }
         return titles.get(status_code, "Error")
