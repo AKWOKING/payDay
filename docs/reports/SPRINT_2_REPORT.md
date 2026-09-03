@@ -6,7 +6,7 @@
 **Date:** September 2026  
 **Author / Roles:** System Architect, Computer Engineer, Backend Developer  
 **Recipients:** Project Manager, Frontend Developer (Flutter & Angular Teams)  
-**Status:** **100% COMPLETED & VERIFIED** (32/32 Automated Tests Passing)  
+**Status:** **100% COMPLETED & VERIFIED** (38/38 Automated Tests Passing)  
 
 ---
 
@@ -17,7 +17,7 @@ Sprint 2 has successfully brought **PayDay's first live external channel (MTN Mo
 
 The system now supports full end-to-end **Deposits (Cash-In)** via MTN MoMo Collections (`RequestToPay`) and **Withdrawals (Cash-Out)** via MTN MoMo Disbursements (`Transfer`). Every money movement is governed by an auditable state machine, atomic ledger reservations, transaction PIN verification, and idempotency guarantees.
 
-The backend is currently running live on **port 8000** with **32 passing automated test suites** and live OpenAPI contracts at `/docs`.
+The backend is currently running live on **port 8000** with **38 passing automated test suites** and live OpenAPI contracts at `/docs`.
 
 ---
 
@@ -34,26 +34,38 @@ The backend is currently running live on **port 8000** with **32 passing automat
 | **Deposit API** | Client endpoint `POST /api/v1/wallet/deposit` | **DONE** | `src/payday/api/v1/transactions.py` |
 | **Withdrawal API** | Client endpoint `POST /api/v1/wallet/withdraw` (with PIN check & hold) | **DONE** | `src/payday/api/v1/transactions.py` |
 | **History & Receipts** | Paginated transaction history and downloadable receipt DTOs | **DONE** | `src/payday/api/v1/transactions.py` |
+| **Dedicated Stress Test Suites** | Idempotency attacks, webhook HMAC security, illegal state transitions, network timeout compensatory releases | **DONE** | `tests/test_sprint2_*.py` (6 test suites) |
 
 ---
 
 ## 3. Milestone & Schedule Tracking
 
 According to our 8-week delivery plan:
-- **Milestone (End of Week 4):** *MTN Mobile Money fully working end-to-end (deposit and withdrawal) with transaction history and webhook handling.*
+- **Milestone (End of Week 4):** *MTN Mobile Money fully working end-to-end (deposit and withdrawal) with transaction history, state machine, and webhook handling.*
 - **Current Status:** **DELIVERED ON SCHEDULE.**
 
 ```
-============================= 32 passed in 14.72s ==============================
+============================= 38 passed in 19.79s ==============================
 ```
 
-All 32 test suites covering deposits, withdrawals, fee calculations, concurrency holds, hold releases on telco failure, idempotency deduplication, and webhook listeners passed with 100% success.
+All 38 test suites covering deposits, withdrawals, fee calculations, concurrency holds, hold releases on telco failure, idempotency deduplication under race conditions, webhook HMAC signature validation, and replay attack immunity passed with 100% success.
 
 ---
 
-## 4. Sprint 3 Planning & Readiness
+## 4. Sprint 2 Focus & Stress Verification Results
 
-With MTN Mobile Money operational, the backend is primed for **Sprint 3 (Weeks 5–6: Orange Money Adapter, Notification Engine & Admin Back-Office Reconciliation)**:
+| Security / Concurrency Test Suite | Target Under Stress | Test Scenario | Result |
+| :--- | :--- | :--- | :---: |
+| `test_sprint2_idempotency_attack.py` | `TransactionManager` & DB unique constraints | 10 concurrent requests + 5 sequential requests with identical `Idempotency-Key` | **PASSED** (1 unique TX generated) |
+| `test_sprint2_webhook_replay_security.py` | `/api/v1/webhooks/mtn` | 1. Invalid HMAC signature $\rightarrow$ 403 Forbidden<br>2. 5x Replay attack $\rightarrow$ Only 1 balance credit | **PASSED** (100% immune) |
+| `test_sprint2_state_transitions.py` | Transaction State Machine | Enforces allowed jumps (`PENDING` $\rightarrow$ `PROCESSING` $\rightarrow$ `SUCCESS`/`FAILED`) and halts illegal jumps (`FAILED` $\rightarrow$ `SUCCESS`) | **PASSED** (`InvalidStateTransitionError`) |
+| `test_sprint2_telco_timeout_recovery.py` | Double-entry ledger hold mechanism | Telco HTTP 504 Gateway Timeout during disbursement $\rightarrow$ Automatic compensatory hold release | **PASSED** (Locked funds restored to available) |
+
+---
+
+## 5. Sprint 3 Planning & Readiness
+
+With MTN Mobile Money operational and thoroughly battle-tested, the backend is primed for **Sprint 3 (Weeks 5–6: Orange Money Adapter, Notification Engine & Admin Back-Office Reconciliation)**:
 1. **Orange Money Adapter:** Web Payment API and Merchant Payout listener.
 2. **Notification Engine:** Asynchronous SMS & Push alert dispatcher on transaction state changes.
 3. **Admin Reconciliation Matrix:** Settlement report vs ledger audit tool.
