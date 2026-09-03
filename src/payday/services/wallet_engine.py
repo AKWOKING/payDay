@@ -66,7 +66,32 @@ class WalletEngine:
         return wallet
 
     @staticmethod
-    async def validate_withdrawal_capacity(wallet: Wallet, amount: Decimal, fee: Decimal) -> None:
+    async def get_cumulative_daily_volume(
+        db: AsyncSession,
+        wallet_id: str,
+        tx_type: TransactionType = TransactionType.WITHDRAW,
+    ) -> Decimal:
+        """Calculates total volume of SUCCESS and PROCESSING transactions of given type in the last 24 hours."""
+        from datetime import datetime, timedelta, timezone
+        from payday.models.transaction import Transaction, TransactionStatus
+        from sqlalchemy import func
+        since = datetime.now(timezone.utc) - timedelta(hours=24)
+        query = select(func.coalesce(func.sum(Transaction.amount), 0)).where(
+            Transaction.wallet_id == wallet_id,
+            Transaction.type == tx_type,
+            Transaction.status.in_([TransactionStatus.SUCCESS, TransactionStatus.PROCESSING]),
+            Transaction.created_at >= since,
+        )
+        result = await db.execute(query)
+        return Decimal(str(result.scalar_one()))
+
+    @staticmethod
+    async def validate_withdrawal_capacity(
+        db: AsyncSession,
+        wallet: Wallet,
+        amount: Decimal,
+        fee: Decimal,
+    ) -> None:
         """Verifies that the wallet has sufficient available balance and complies with limits."""
         total_required = amount + fee
         available = wallet.balance - wallet.locked_balance
@@ -74,10 +99,11 @@ class WalletEngine:
         if available < total_required:
             raise InsufficientFundsError(available=float(available), required=float(total_required))
 
-        if amount > wallet.daily_limit:
+        daily_volume = await WalletEngine.get_cumulative_daily_volume(db, wallet.wallet_id, TransactionType.WITHDRAW)
+        if (daily_volume + amount) > wallet.daily_limit:
             raise DailyLimitExceededError(
                 limit=float(wallet.daily_limit),
-                current_total=0.0,
+                current_total=float(daily_volume),
                 requested=float(amount)
             )
 
@@ -94,7 +120,7 @@ class WalletEngine:
         Increments locked_balance by (amount + fee).
         """
         total_hold = amount + fee
-        await WalletEngine.validate_withdrawal_capacity(wallet, amount, fee)
+        await WalletEngine.validate_withdrawal_capacity(db, wallet, amount, fee)
 
         wallet.locked_balance = (wallet.locked_balance + total_hold).quantize(Decimal("0.01"))
         await audit_service.log_action(

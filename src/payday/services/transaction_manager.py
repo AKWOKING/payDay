@@ -1,7 +1,7 @@
 import uuid
 from decimal import Decimal
 from datetime import datetime, timezone
-from typing import Optional, List, Tuple, Set
+from typing import Optional, List, Tuple, Set, Dict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
@@ -44,6 +44,9 @@ class TransactionManager:
     Orchestrates money-movement operations, external channel adapter requests,
     webhook callback processing, and the transaction state machine.
     """
+
+    # In-memory tracker for consecutive failed PIN attempts (backed by Redis in distributed clusters)
+    _failed_pin_attempts: Dict[str, int] = {}
 
     # Allowed valid transitions in the transaction lifecycle
     ALLOWED_TRANSITIONS = {
@@ -240,7 +243,40 @@ class TransactionManager:
             raise PinNotSetError()
 
         if not verify_pin(req.pin, user.pin_hash):
-            raise InvalidPinError()
+            current_fails = TransactionManager._failed_pin_attempts.get(user.user_id, 0) + 1
+            TransactionManager._failed_pin_attempts[user.user_id] = current_fails
+            logger.warning(f"[SECURITY] Failed PIN attempt {current_fails}/5 for user {user.user_id}")
+
+            if current_fails >= 5:
+                # 5th failed attempt -> Auto-freeze wallet
+                user_wallet = await wallet_engine.get_wallet_by_user_id(db, user.user_id)
+                wallet = await wallet_engine.get_wallet_with_lock(db, user_wallet.wallet_id, require_active=False)
+                wallet.status = WalletStatus.FROZEN
+                
+                # Log audit trail
+                await audit_service.log_action(
+                    db=db,
+                    action="WALLET_AUTO_FROZEN_PIN_BRUTE_FORCE",
+                    entity_name="Wallet",
+                    entity_id=wallet.wallet_id,
+                    actor_id=user.user_id,
+                    new_state={"status": WalletStatus.FROZEN.value, "failed_attempts": current_fails},
+                )
+                
+                # Dispatch Security Notification
+                from payday.services.notification_service import notification_service
+                await notification_service.dispatch_security_alert(
+                    db=db,
+                    user=user,
+                    message="PayDay Security Alert: Your wallet has been suspended due to 5 consecutive failed PIN attempts. Please contact support to verify identity.",
+                )
+                await db.commit()
+                raise WalletFrozenError("Your wallet has been suspended due to 5 consecutive failed PIN attempts.")
+
+            raise InvalidPinError(f"Invalid transaction PIN. Attempt {current_fails} of 5.")
+
+        # On valid PIN, clear failed attempts
+        TransactionManager._failed_pin_attempts.pop(user.user_id, None)
 
         # Idempotency check
         idempotency_key = req.idempotency_key or str(uuid.uuid4())

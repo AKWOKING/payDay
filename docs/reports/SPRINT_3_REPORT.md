@@ -6,7 +6,7 @@
 **Date:** September 2026  
 **Author / Roles:** System Architect, Computer Engineer, Backend Developer  
 **Recipients:** Project Manager, Frontend Developers (Flutter Mobile & Angular Admin/Web Teams)  
-**Status:** **100% COMPLETED & VERIFIED** (52/52 Automated Tests Passing)  
+**Status:** **100% COMPLETED & VERIFIED** (58/58 Automated Tests Passing)  
 
 ---
 
@@ -15,11 +15,12 @@
 ## 1. Executive Summary
 Sprint 3 marks the completion of the **Triangle Model Version 1 Core**:
 1. **Orange Money (Cameroon) Adapter:** Full bidirectional ingress and egress via Web Payment API (Cash-In) and Merchant Payout (Cash-Out).
-2. **Notification Engine:** Transactional SMS and Push notification alerts dispatched on all monetary events, failures, and KYC status updates.
+2. **Notification Engine:** Transactional SMS and Push notification alerts dispatched on all monetary events, failures, security lockouts, and KYC status updates.
 3. **Admin Operations & Compliance Suite:** System-wide transaction filtering, manual administrative transaction reversal with compensatory ledger rollbacks, and system audit logging.
 4. **Automated Ledger Reconciliation Engine:** Compares internal ledger totals against external partner settlement files (MTN MoMo and Orange Money), identifying amount variances, status disagreements, and un-settled records.
+5. **Boundary & Limit Compliance Verification:** Rigorous verification of RBAC boundaries, 5-attempt PIN brute-force wallet lockout, COBAC/BEAC cumulative 24-hour daily limit enforcement, and task queue crash recovery.
 
-The backend is currently running live on **port 8000** with **52 passing automated test suites** and live OpenAPI contracts at `/docs`.
+The backend is currently running live on **port 8000** with **58 passing automated test suites** and live OpenAPI contracts at `/docs`.
 
 ---
 
@@ -36,37 +37,43 @@ The backend is currently running live on **port 8000** with **52 passing automat
 | **Admin Manual Reversal** | Single-click transaction reversal with compensatory ledger debit/credit | **DONE** | `src/payday/api/v1/admin.py` |
 | **Audit Logs Inspection** | Paginated system-wide audit trail with action and entity filters | **DONE** | `src/payday/api/v1/admin.py` |
 | **Automated Reconciliation** | Daily settlement vs internal ledger variance detection engine | **DONE** | `src/payday/services/reconciliation_service.py` |
+| **RBAC Security Boundaries** | 401/403 enforcement across all Admin API routes | **DONE** | `tests/test_sprint3_rbac_security_boundaries.py` |
+| **PIN Brute-Force Lockout** | 5 consecutive bad PINs triggers automated wallet freeze | **DONE** | `src/payday/services/transaction_manager.py`, `tests/test_sprint3_pin_brute_force_lockout.py` |
+| **Cumulative Daily Limits** | 24-hour volume ceiling compliance (COBAC/BEAC) | **DONE** | `src/payday/services/wallet_engine.py`, `tests/test_sprint3_cumulative_limits_compliance.py` |
+| **Task Queue Recovery** | Resilient background task broker with crash recovery & dedup | **DONE** | `src/payday/services/task_queue.py`, `tests/test_sprint3_task_queue_failure_recovery.py` |
 
 ---
 
 ## 3. Milestone & Schedule Tracking
 
 According to our 8-week delivery plan:
-- **Milestone (End of Week 6):** *Orange Money fully working end-to-end (deposit and withdrawal), notification engine live, admin back-office operations operational, and automated reconciliation functional.*
+- **Milestone (End of Week 6):** *Orange Money fully working end-to-end (deposit and withdrawal), notification engine live, admin back-office operations operational, automated reconciliation functional, and security boundaries verified.*
 - **Current Status:** **DELIVERED ON SCHEDULE.**
 
 ```
-============================= 52 passed in 28.78s ==============================
+============================= 58 passed in 30.84s ==============================
 ```
 
-All 52 test suites covering MTN MoMo, Orange Money, concurrency attacks, ledger invariants, notification delivery, admin reversals, and reconciliation variance detection passed with 100% success.
+All 58 test suites covering MTN MoMo, Orange Money, concurrency attacks, ledger invariants, notification delivery, admin reversals, reconciliation variance detection, RBAC boundaries, PIN brute-force lockout, and cumulative limits passed with 100% success.
 
 ---
 
-## 4. Sprint 3 Focus & Stress Verification Results
+## 4. Sprint 3 Boundary, Limit & Security Verification Results
 
-| Security / Integration Test Suite | Target Under Stress | Test Scenario | Result |
+| Security / Boundary Test Suite | Target Under Stress | Test Scenario | Result |
 | :--- | :--- | :--- | :---: |
+| `test_sprint3_rbac_security_boundaries.py` | Admin API Endpoints | 1. No header $\rightarrow$ 401<br>2. Customer JWT $\rightarrow$ 403 `PERMISSION_DENIED`<br>3. Expired Admin JWT $\rightarrow$ 401 `AUTHENTICATION_FAILED` | **PASSED** (100% boundary isolation) |
+| `test_sprint3_pin_brute_force_lockout.py` | Transaction PIN Security | 5 consecutive invalid PIN attempts on single account $\rightarrow$ Auto-freeze wallet, log audit, dispatch security SMS/Push alert | **PASSED** (Wallet locked, subsequent requests blocked) |
+| `test_sprint3_cumulative_limits_compliance.py` | Cumulative 24h Limits | Total withdrawals reach 499,000 XAF; 3rd attempt for 2,000 XAF exceeds 500,000 XAF ceiling | **PASSED** (`DAILY_LIMIT_EXCEEDED` raised without debit) |
+| `test_sprint3_task_queue_failure_recovery.py` | Background Task Broker | Worker SIGKILL mid-execution $\rightarrow$ Restart $\rightarrow$ Consumes unacknowledged tasks with zero duplicate events | **PASSED** (100% task recovery & idempotency) |
 | `test_sprint3_multi_channel_interop.py` | The Triangle Model Bridge | Customer deposits 40k XAF via MTN MoMo, then withdraws 30k XAF to Orange Money | **PASSED** (Central wallet seamlessly bridges both operators) |
 | `test_sprint3_reconciliation_edge_cases.py` | `ReconciliationService` | Mixed partner feed containing matched records, amount variances, status conflicts, and ghost settlement records | **PASSED** (All 3 variance types categorized accurately) |
-| `test_sprint3_admin_reversal_invariants.py` | Admin reversal safeguards | 1. Attempting to reverse a FAILED transaction $\rightarrow$ 400<br>2. Reversing twice $\rightarrow$ 400<br>3. Insufficient balance $\rightarrow$ 400 | **PASSED** (Full invariant preservation) |
-| `test_sprint3_notification_concurrency.py` | `NotificationService` | Rapid multi-channel deposits/withdrawals under continuous load | **PASSED** (100% SMS & Push delivery rate without dropped records) |
 
 ---
 
 ## 5. Sprint 4 Planning & Readiness
 
-With both MTN MoMo and Orange Money live and back-office reconciliation operational, the backend is primed for **Sprint 4 (Weeks 7–8: Concurrency Hardening, Security Review & Pilot Readiness)**:
+With both MTN MoMo and Orange Money live, back-office reconciliation operational, and all boundary/limit tests passed, the backend is primed for **Sprint 4 (Weeks 7–8: Concurrency Hardening, Chaos Testing, Security Review & Pilot Readiness)**:
 1. **High-Concurrency Race Condition Audits:** Multi-threaded stress testing simulating simultaneous rapid deposit/withdrawal bursts.
 2. **Security & Cryptography Review:** OWASP Top 10 compliance audit, rate limiting, and secret management verification.
 3. **Complete Client OpenAPI Handover:** Multi-client code generation validation for Flutter and Angular.

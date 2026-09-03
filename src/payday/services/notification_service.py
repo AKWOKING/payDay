@@ -13,7 +13,7 @@ from payday.core.logging import logger
 class NotificationService:
     """
     Manages generation, queuing, and delivery of transactional SMS & Push alerts.
-    Dispatches alerts on deposits, withdrawals, failures, and KYC status changes.
+    Dispatches alerts on deposits, withdrawals, failures, security events, and KYC status changes.
     """
 
     @staticmethod
@@ -76,6 +76,38 @@ class NotificationService:
         await db.flush()
         logger.info(f"[NOTIFICATIONS] Dispatched SMS & Push for transaction {transaction.transaction_id} to {user.phone_number}")
         return notifications
+
+    @staticmethod
+    async def dispatch_security_alert(
+        db: AsyncSession,
+        user: User,
+        message: str,
+    ) -> List[Notification]:
+        """Dispatches immediate high-priority SMS and Push security alerts (e.g. account lockout)."""
+        now = datetime.now(timezone.utc)
+        sms = Notification(
+            user_id=user.user_id,
+            channel=NotificationChannel.SMS,
+            recipient=user.phone_number,
+            message=message,
+            status=NotificationStatus.SENT,
+            sent_at=now,
+        )
+        db.add(sms)
+
+        push = Notification(
+            user_id=user.user_id,
+            channel=NotificationChannel.PUSH,
+            recipient=f"device-token-{user.user_id[:8]}",
+            message=message,
+            status=NotificationStatus.SENT,
+            sent_at=now,
+        )
+        db.add(push)
+
+        await db.flush()
+        logger.warning(f"[SECURITY ALERT] Dispatched security alert to user {user.user_id} ({user.phone_number})")
+        return [sms, push]
 
     @staticmethod
     async def dispatch_kyc_alert(
