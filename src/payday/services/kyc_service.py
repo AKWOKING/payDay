@@ -84,6 +84,14 @@ class KycService:
         old_state = {"kyc_status": user.kyc_status.value}
         user.kyc_status = status
 
+        from payday.services.notification_service import notification_service
+        await notification_service.dispatch_kyc_alert(
+            db=db,
+            user=user,
+            status=status.value,
+            reason=reason,
+        )
+
         await audit_service.log_action(
             db=db,
             action=f"KYC_{status.value}",

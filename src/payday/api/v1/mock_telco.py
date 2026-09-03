@@ -33,3 +33,29 @@ async def simulate_mtn_callback(
             "new_status": tx.status.value,
         },
     )
+
+
+@router.post(
+    "/orange/simulate-callback",
+    response_model=APIResponse[dict],
+    summary="Simulate Orange Money Payment Approval or Rejection",
+    description="Development & Testing tool allowing Flutter/Angular developers to simulate customer approving Orange Money web payment or PIN prompt.",
+)
+async def simulate_orange_callback(
+    payload: WebhookCallbackPayload,
+    db: AsyncSession = Depends(get_db),
+):
+    tx = await transaction_manager.process_webhook(
+        db=db,
+        channel=TransactionChannel.ORANGE,
+        payload=payload,
+    )
+    return APIResponse(
+        success=True,
+        message=f"Simulated Orange Money callback processed: Transaction {tx.status.value}",
+        data={
+            "transaction_id": tx.transaction_id,
+            "external_ref": tx.external_ref,
+            "new_status": tx.status.value,
+        },
+    )

@@ -212,6 +212,16 @@ class TransactionManager:
                 "external_ref": transaction.external_ref,
             },
         )
+
+        # Dispatch Transaction Notification
+        from payday.services.notification_service import notification_service
+        await notification_service.dispatch_transaction_alert(
+            db=db,
+            user=user,
+            transaction=transaction,
+            current_balance=float(wallet.balance),
+        )
+
         await db.commit()
         await db.refresh(transaction)
         return transaction
@@ -350,6 +360,15 @@ class TransactionManager:
                 "external_ref": transaction.external_ref,
             },
         )
+
+        from payday.services.notification_service import notification_service
+        await notification_service.dispatch_transaction_alert(
+            db=db,
+            user=user,
+            transaction=transaction,
+            current_balance=float(wallet.balance),
+        )
+
         await db.commit()
         await db.refresh(transaction)
         return transaction
@@ -440,6 +459,19 @@ class TransactionManager:
                 "external_ref": payload.external_ref,
             },
         )
+
+        # Dispatch Notification on Webhook Finalization
+        user_res = await db.execute(select(User).where(User.user_id == wallet.user_id))
+        target_user = user_res.scalars().first()
+        if target_user:
+            from payday.services.notification_service import notification_service
+            await notification_service.dispatch_transaction_alert(
+                db=db,
+                user=target_user,
+                transaction=transaction,
+                current_balance=float(wallet.balance),
+            )
+
         await db.commit()
         await db.refresh(transaction)
         return transaction

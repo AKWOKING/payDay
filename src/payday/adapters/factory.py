@@ -2,6 +2,7 @@ from payday.models.linked_account import ChannelProvider
 from payday.models.transaction import TransactionChannel
 from payday.adapters.base import PaymentChannelAdapter
 from payday.adapters.mtn_momo import mtn_momo_adapter
+from payday.adapters.orange_money import orange_money_adapter
 from payday.core.exceptions import PayDayException
 
 
@@ -14,8 +15,7 @@ class ChannelAdapterFactory:
         if "MTN" in ch_upper:
             return mtn_momo_adapter
         elif "ORANGE" in ch_upper:
-            # In Sprint 2, Orange returns the mock adapter or stub until Sprint 3
-            return mtn_momo_adapter
+            return orange_money_adapter
         elif "UBA" in ch_upper:
             raise PayDayException(
                 status_code=400,
