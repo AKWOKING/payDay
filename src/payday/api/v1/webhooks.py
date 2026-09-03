@@ -6,6 +6,7 @@ from payday.schemas.transaction import WebhookCallbackPayload
 from payday.services.transaction_manager import transaction_manager
 from payday.adapters.factory import adapter_factory
 from payday.models.transaction import TransactionChannel
+from payday.core.exceptions import PayDayException
 from payday.core.logging import logger
 
 router = APIRouter(prefix="/webhooks", tags=["Telco Webhooks"])
@@ -30,8 +31,13 @@ async def mtn_webhook(
     adapter = adapter_factory.get_adapter("MTN")
     is_valid = await adapter.verify_webhook_signature(headers, body)
     if not is_valid:
-        logger.warning("[WEBHOOK] Unauthorized MTN webhook callback signature")
-        return APIResponse(success=False, message="Invalid webhook signature")
+        logger.warning("[WEBHOOK] Unauthorized MTN webhook callback signature / token rejected")
+        raise PayDayException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid or missing webhook signature credentials",
+            code="WEBHOOK_UNAUTHORIZED",
+            title="Unauthorized Webhook",
+        )
 
     tx = await transaction_manager.process_webhook(
         db=db,
@@ -64,8 +70,13 @@ async def orange_webhook(
     adapter = adapter_factory.get_adapter("ORANGE")
     is_valid = await adapter.verify_webhook_signature(headers, body)
     if not is_valid:
-        logger.warning("[WEBHOOK] Unauthorized Orange webhook callback signature")
-        return APIResponse(success=False, message="Invalid webhook signature")
+        logger.warning("[WEBHOOK] Unauthorized Orange webhook callback signature rejected")
+        raise PayDayException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid or missing webhook signature credentials",
+            code="WEBHOOK_UNAUTHORIZED",
+            title="Unauthorized Webhook",
+        )
 
     tx = await transaction_manager.process_webhook(
         db=db,

@@ -167,3 +167,14 @@ class DuplicateTransactionError(PayDayException):
             code="DUPLICATE_TRANSACTION",
             title="Duplicate Request",
         )
+
+
+class InvalidStateTransitionError(PayDayException):
+    def __init__(self, current_status: str, target_status: str):
+        super().__init__(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Illegal transaction state transition from '{current_status}' to '{target_status}'.",
+            code="INVALID_STATE_TRANSITION",
+            title="Invalid State Transition",
+            extra={"current_status": current_status, "target_status": target_status},
+        )

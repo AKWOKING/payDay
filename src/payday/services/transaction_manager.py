@@ -1,7 +1,7 @@
 import uuid
 from decimal import Decimal
 from datetime import datetime, timezone
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Set
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
@@ -34,6 +34,7 @@ from payday.core.exceptions import (
     WalletFrozenError,
     UserNotFoundError,
     DuplicateTransactionError,
+    InvalidStateTransitionError,
 )
 from payday.core.logging import logger
 
@@ -43,6 +44,25 @@ class TransactionManager:
     Orchestrates money-movement operations, external channel adapter requests,
     webhook callback processing, and the transaction state machine.
     """
+
+    # Allowed valid transitions in the transaction lifecycle
+    ALLOWED_TRANSITIONS = {
+        TransactionStatus.PENDING: {TransactionStatus.PROCESSING, TransactionStatus.FAILED},
+        TransactionStatus.PROCESSING: {TransactionStatus.SUCCESS, TransactionStatus.FAILED},
+        TransactionStatus.SUCCESS: {TransactionStatus.REVERSED},
+        TransactionStatus.FAILED: set(),    # Terminal state
+        TransactionStatus.REVERSED: set(),  # Terminal state
+    }
+
+    @classmethod
+    def validate_state_transition(cls, current: TransactionStatus, target: TransactionStatus) -> None:
+        """Validates that state transition obeys the strict state machine rules."""
+        if current == target:
+            return  # Idempotent replay
+
+        allowed = cls.ALLOWED_TRANSITIONS.get(current, set())
+        if target not in allowed:
+            raise InvalidStateTransitionError(current_status=current.value, target_status=target.value)
 
     @staticmethod
     async def _get_or_create_linked_account(
@@ -60,15 +80,26 @@ class TransactionManager:
         )
         linked = result.scalars().first()
         if not linked:
-            linked = LinkedExternalAccount(
-                user_id=user_id,
-                provider=provider,
-                account_identifier=identifier,
-                is_verified=True,
-                is_default=False,
-            )
-            db.add(linked)
-            await db.flush()
+            try:
+                async with db.begin_nested():
+                    linked = LinkedExternalAccount(
+                        user_id=user_id,
+                        provider=provider,
+                        account_identifier=identifier,
+                        is_verified=True,
+                        is_default=False,
+                    )
+                    db.add(linked)
+                    await db.flush()
+            except Exception:
+                result = await db.execute(
+                    select(LinkedExternalAccount).where(
+                        LinkedExternalAccount.user_id == user_id,
+                        LinkedExternalAccount.provider == provider,
+                        LinkedExternalAccount.account_identifier == identifier,
+                    )
+                )
+                linked = result.scalars().first()
         return linked
 
     @staticmethod
@@ -84,6 +115,7 @@ class TransactionManager:
         # Check wallet
         user_wallet = await wallet_engine.get_wallet_by_user_id(db, user.user_id)
         wallet = await wallet_engine.get_wallet_with_lock(db, user_wallet.wallet_id)
+        wallet_id = wallet.wallet_id
 
         # Idempotency check
         idempotency_key = req.idempotency_key or str(uuid.uuid4())
@@ -100,55 +132,72 @@ class TransactionManager:
             provider=channel_provider,
             identifier=payer_phone,
         )
+        linked_account_id = linked_account.linked_account_id if linked_account else None
 
         # Calculate fees
         fee = wallet_engine.calculate_fee(TransactionType.DEPOSIT, req.amount)
         net_amount = (req.amount - fee).quantize(Decimal("0.01"))
 
-        # Create Transaction in PENDING state
-        transaction = Transaction(
-            idempotency_key=idempotency_key,
-            wallet_id=wallet.wallet_id,
-            linked_account_id=linked_account.linked_account_id,
-            type=TransactionType.DEPOSIT,
-            channel=req.channel,
-            amount=req.amount,
-            fee=fee,
-            net_amount=net_amount,
-            status=TransactionStatus.PENDING,
-        )
-        db.add(transaction)
-        await db.flush()
+        # Generate transaction ID up front
+        tx_id = str(uuid.uuid4())
 
         # Call Channel Adapter (MTN / Orange)
         adapter = adapter_factory.get_adapter(req.channel.value)
         deposit_payload = ChannelDepositRequest(
-            transaction_id=transaction.transaction_id,
+            transaction_id=tx_id,
             phone_number=payer_phone,
             amount=req.amount,
             description=f"PayDay deposit of {req.amount} XAF",
         )
 
         channel_res = await adapter.initiate_deposit(deposit_payload)
-        transaction.external_ref = channel_res.channel_ref
+        external_ref = channel_res.channel_ref
+        completed_at = None
+        failure_reason = None
 
         if channel_res.success:
-            transaction.status = TransactionStatus.PROCESSING
-            # If adapter completes immediately (Mock Mode)
+            status = TransactionStatus.PROCESSING
             if channel_res.status == "SUCCESS" or (channel_res.raw_response.get("auto_finalize")):
                 await wallet_engine.credit_deposit(
                     db=db,
                     wallet=wallet,
                     amount=req.amount,
                     fee=fee,
-                    transaction_id=transaction.transaction_id,
+                    transaction_id=tx_id,
                 )
-                transaction.status = TransactionStatus.SUCCESS
-                transaction.completed_at = datetime.now(timezone.utc)
+                status = TransactionStatus.SUCCESS
+                completed_at = datetime.now(timezone.utc)
         else:
-            transaction.status = TransactionStatus.FAILED
-            transaction.failure_reason = channel_res.message
-            transaction.completed_at = datetime.now(timezone.utc)
+            status = TransactionStatus.FAILED
+            failure_reason = channel_res.message
+            completed_at = datetime.now(timezone.utc)
+
+        # Create Transaction atomically
+        transaction = Transaction(
+            transaction_id=tx_id,
+            idempotency_key=idempotency_key,
+            wallet_id=wallet_id,
+            linked_account_id=linked_account_id,
+            type=TransactionType.DEPOSIT,
+            channel=req.channel,
+            amount=req.amount,
+            fee=fee,
+            net_amount=net_amount,
+            status=status,
+            external_ref=external_ref,
+            failure_reason=failure_reason,
+            completed_at=completed_at,
+        )
+
+        try:
+            async with db.begin_nested():
+                db.add(transaction)
+                await db.flush()
+        except Exception:
+            existing_tx = (await db.execute(select(Transaction).where(Transaction.idempotency_key == idempotency_key))).scalars().first()
+            if existing_tx:
+                return existing_tx
+            raise
 
         await audit_service.log_action(
             db=db,
@@ -192,6 +241,7 @@ class TransactionManager:
         # Acquire lock on wallet
         user_wallet = await wallet_engine.get_wallet_by_user_id(db, user.user_id)
         wallet = await wallet_engine.get_wallet_with_lock(db, user_wallet.wallet_id)
+        wallet_id = wallet.wallet_id
 
         # Calculate fees
         fee = wallet_engine.calculate_fee(TransactionType.WITHDRAW, req.amount)
@@ -205,21 +255,10 @@ class TransactionManager:
             provider=channel_provider,
             identifier=req.destination_phone,
         )
+        linked_account_id = linked_account.linked_account_id if linked_account else None
 
-        # Create Transaction
-        transaction = Transaction(
-            idempotency_key=idempotency_key,
-            wallet_id=wallet.wallet_id,
-            linked_account_id=linked_account.linked_account_id,
-            type=TransactionType.WITHDRAW,
-            channel=req.channel,
-            amount=req.amount,
-            fee=fee,
-            net_amount=net_amount,
-            status=TransactionStatus.PENDING,
-        )
-        db.add(transaction)
-        await db.flush()
+        # Generate tx_id
+        tx_id = str(uuid.uuid4())
 
         # Hold funds on wallet ledger (Increments locked_balance)
         await wallet_engine.hold_funds(
@@ -227,23 +266,25 @@ class TransactionManager:
             wallet=wallet,
             amount=req.amount,
             fee=fee,
-            transaction_id=transaction.transaction_id,
+            transaction_id=tx_id,
         )
 
         # Call Channel Adapter for Disbursement
         adapter = adapter_factory.get_adapter(req.channel.value)
         withdrawal_payload = ChannelWithdrawalRequest(
-            transaction_id=transaction.transaction_id,
+            transaction_id=tx_id,
             destination_phone=req.destination_phone,
             amount=req.amount,
             description=f"PayDay withdrawal of {req.amount} XAF",
         )
 
         channel_res = await adapter.initiate_withdrawal(withdrawal_payload)
-        transaction.external_ref = channel_res.channel_ref
+        external_ref = channel_res.channel_ref
+        completed_at = None
+        failure_reason = None
 
         if channel_res.success:
-            transaction.status = TransactionStatus.PROCESSING
+            status = TransactionStatus.PROCESSING
             # In mock or immediate mode, finalize withdrawal
             if channel_res.status == "SUCCESS" or (channel_res.raw_response.get("auto_finalize")):
                 await wallet_engine.finalize_withdrawal(
@@ -251,10 +292,10 @@ class TransactionManager:
                     wallet=wallet,
                     amount=req.amount,
                     fee=fee,
-                    transaction_id=transaction.transaction_id,
+                    transaction_id=tx_id,
                 )
-                transaction.status = TransactionStatus.SUCCESS
-                transaction.completed_at = datetime.now(timezone.utc)
+                status = TransactionStatus.SUCCESS
+                completed_at = datetime.now(timezone.utc)
         else:
             # External call failed -> Release hold automatically
             await wallet_engine.release_hold(
@@ -262,12 +303,39 @@ class TransactionManager:
                 wallet=wallet,
                 amount=req.amount,
                 fee=fee,
-                transaction_id=transaction.transaction_id,
+                transaction_id=tx_id,
                 reason=channel_res.message,
             )
-            transaction.status = TransactionStatus.FAILED
-            transaction.failure_reason = channel_res.message
-            transaction.completed_at = datetime.now(timezone.utc)
+            status = TransactionStatus.FAILED
+            failure_reason = channel_res.message
+            completed_at = datetime.now(timezone.utc)
+
+        # Create Transaction atomically
+        transaction = Transaction(
+            transaction_id=tx_id,
+            idempotency_key=idempotency_key,
+            wallet_id=wallet_id,
+            linked_account_id=linked_account_id,
+            type=TransactionType.WITHDRAW,
+            channel=req.channel,
+            amount=req.amount,
+            fee=fee,
+            net_amount=net_amount,
+            status=status,
+            external_ref=external_ref,
+            failure_reason=failure_reason,
+            completed_at=completed_at,
+        )
+
+        try:
+            async with db.begin_nested():
+                db.add(transaction)
+                await db.flush()
+        except Exception:
+            existing_tx = (await db.execute(select(Transaction).where(Transaction.idempotency_key == idempotency_key))).scalars().first()
+            if existing_tx:
+                return existing_tx
+            raise
 
         await audit_service.log_action(
             db=db,
@@ -317,10 +385,16 @@ class TransactionManager:
             logger.info(f"[WEBHOOK] Transaction {transaction.transaction_id} already finalized ({transaction.status.value}). Acknowledging duplicate.")
             return transaction
 
+        # Determine target state
+        target_status = TransactionStatus.SUCCESS if payload.status.upper() in ("SUCCESSFUL", "SUCCESS") else TransactionStatus.FAILED
+        
+        # Enforce State Machine Validation
+        TransactionManager.validate_state_transition(transaction.status, target_status)
+
         # Lock wallet
         wallet = await wallet_engine.get_wallet_with_lock(db, transaction.wallet_id)
 
-        if payload.status.upper() in ("SUCCESSFUL", "SUCCESS"):
+        if target_status == TransactionStatus.SUCCESS:
             if transaction.type == TransactionType.DEPOSIT:
                 await wallet_engine.credit_deposit(
                     db=db,

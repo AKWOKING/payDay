@@ -7,6 +7,7 @@ import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.pool import StaticPool
 
 # Ensure src is in sys.path
 sys.path.insert(0, os.path.abspath("src"))
@@ -17,12 +18,13 @@ from payday.core.security import get_password_hash, create_access_token
 from payday.models.user import User, KycStatus, UserRole, UserStatus
 from payday.models.wallet import Wallet, WalletStatus
 
-# Use an in-memory SQLite for tests
+# Use an in-memory SQLite with StaticPool so multiple sessions share the same memory database
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
 test_engine = create_async_engine(
     TEST_DATABASE_URL,
     connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
     future=True,
 )
 
@@ -50,7 +52,8 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 @pytest_asyncio.fixture(scope="function")
 async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     async def override_get_db():
-        yield db_session
+        async with TestAsyncSessionLocal() as session:
+            yield session
 
     app.dependency_overrides[get_db] = override_get_db
     transport = ASGITransport(app=app)

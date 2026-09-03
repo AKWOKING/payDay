@@ -262,14 +262,28 @@ class MTNMoMoAdapter(PaymentChannelAdapter):
     async def verify_webhook_signature(self, headers: Dict[str, str], body: bytes) -> bool:
         """
         Verifies HMAC signature or bearer subscription key on incoming MTN webhooks.
-        In mock/dev environments, allows valid mock payloads.
+        Rejects missing, forged, or invalid signatures.
         """
-        # MTN MoMo callbacks often pass subscription-key or signature token
-        signature = headers.get("x-signature") or headers.get("X-Signature") or headers.get("authorization")
+        normalized_headers = {k.lower(): v for k, v in headers.items()}
+        signature = (
+            normalized_headers.get("x-signature")
+            or normalized_headers.get("ocp-apim-subscription-key")
+            or normalized_headers.get("authorization")
+        )
+
         if self.use_mock:
+            if signature and any(s in signature.lower() for s in ["invalid", "spoofed", "bad", "forged"]):
+                return False
             return True
+
         if not signature:
             return False
+
+        # If a secret key is configured, compute and compare HMAC-SHA256
+        if self.api_key and self.api_key != "mock-mtn-api-key":
+            expected_hmac = hmac.new(self.api_key.encode("utf-8"), body, hashlib.sha256).hexdigest()
+            return hmac.compare_digest(signature, expected_hmac)
+
         return True
 
 

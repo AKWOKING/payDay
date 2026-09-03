@@ -31,7 +31,7 @@ class Transaction(TimeStampedModel):
     idempotency_key = Column(String(100), unique=True, nullable=False, index=True)
     
     wallet_id = Column(String(36), ForeignKey("wallets.wallet_id", ondelete="RESTRICT"), nullable=False, index=True)
-    linked_account_id = Column(String(36), ForeignKey("linked_external_accounts.linked_account_id", ondelete="RESTRICT"), nullable=False, index=True)
+    linked_account_id = Column(String(36), ForeignKey("linked_external_accounts.linked_account_id", ondelete="SET NULL"), nullable=True, index=True)
     
     type = Column(Enum(TransactionType), nullable=False, index=True)
     channel = Column(Enum(TransactionChannel), nullable=False, index=True)
