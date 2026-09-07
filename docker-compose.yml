@@ -1,0 +1,89 @@
+# =============================================================================
+# PayDay e-Wallet — local / pilot compose stack
+#
+# Services:
+#   db        PostgreSQL 15, the production-target datastore.
+#   migrate   One-shot Alembic `upgrade head`, gated on db health.
+#   api       FastAPI application, gated on migrations completing.
+#
+# NOTE ON REDIS / CELERY
+# ----------------------
+# The architecture calls for Redis 7 + Celery, but the application does not
+# currently connect to either: `services/task_queue.py` is an in-process
+# simulation and the PIN-attempt counter in `services/transaction_manager.py`
+# is an in-memory dict. No Redis service is defined here, because a broker
+# nothing talks to would be misleading. See docs/FINAL_PROJECT_HANDOVER.md
+# ("Known Gaps") — this is the blocker for running more than one API replica.
+# =============================================================================
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: payday-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-payday_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-payday_password}
+      POSTGRES_DB: ${POSTGRES_DB:-payday_db}
+    volumes:
+      - payday_pgdata:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      # `pg_isready` alone returns true before the init scripts finish, so we
+      # scope the check to the actual application database.
+      test:
+        ["CMD-SHELL",
+         "pg_isready -U ${POSTGRES_USER:-payday_user} -d ${POSTGRES_DB:-payday_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  migrate:
+    build:
+      context: .
+      target: runtime
+    image: payday-backend:local
+    container_name: payday-migrate
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-payday_user}:${POSTGRES_PASSWORD:-payday_password}@db:5432/${POSTGRES_DB:-payday_db}
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      target: runtime
+    image: payday-backend:local
+    container_name: payday-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-False}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-payday_user}:${POSTGRES_PASSWORD:-payday_password}@db:5432/${POSTGRES_DB:-payday_db}
+      # Override both of these in any non-local environment.
+      SECRET_KEY: ${SECRET_KEY:-payday-super-secret-development-key-change-in-production-min32chars}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-payday_aes256_secret_key_32bytes!}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        ["CMD-SHELL",
+         "curl --fail --silent http://localhost:8000/api/v1/public/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  payday_pgdata:
+    driver: local
