@@ -46,6 +46,36 @@ class Settings(BaseSettings):
     MIN_TRANSACTION_AMOUNT: float = 100.00
     MAX_TRANSACTION_AMOUNT: float = 500000.00
 
+    # Redis / shared counter store (WS-0)
+    # The counter store backs login throttling and the PIN failure counter so
+    # that multiple API replicas enforce ONE combined budget. "memory" is a
+    # process-local store for dev/test only — it is never a fallback for redis.
+    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_REQUIRED: bool = False
+    COUNTER_BACKEND: str = "memory"  # "memory" (dev/test) | "redis" (shared)
+    # Peers allowed to supply X-Forwarded-For for rate-limit IP keys. Empty
+    # means the header is never trusted and the socket peer is used.
+    TRUSTED_PROXY_IPS: List[str] = []
+
+    # Authentication rate limiting (WS-3 / LB-6)
+    # Per-account limit counts attempts (login attempts, both failures and
+    # successes); a successful login resets the per-account counter.
+    LOGIN_RATE_LIMIT_PHONE: int = 5
+    LOGIN_RATE_LIMIT_PHONE_WINDOW: int = 900     # 15 minutes
+    LOGIN_RATE_LIMIT_IP: int = 20
+    LOGIN_RATE_LIMIT_IP_WINDOW: int = 900        # 15 minutes
+    REGISTER_RATE_LIMIT_IP: int = 10
+    REGISTER_RATE_LIMIT_IP_WINDOW: int = 3600    # 1 hour
+    REFRESH_RATE_LIMIT_IP: int = 10
+    REFRESH_RATE_LIMIT_IP_WINDOW: int = 900      # 15 minutes
+
+    # PIN brute-force lockout (WS-5 / LB-4)
+    PIN_FAILURE_LIMIT: int = 5
+    # The counter previously never expired (process-local dict). With Redis it
+    # gains a TTL — a 24h window so old failures are forgiven (D-extra in the
+    # launch-blocker roadmap).
+    PIN_FAILURE_TTL_SECONDS: int = 86400
+
     # Fee Configuration
     DEFAULT_DEPOSIT_FEE_PERCENTAGE: float = 0.005  # 0.5%
     DEFAULT_WITHDRAW_FEE_PERCENTAGE: float = 0.01   # 1.0%

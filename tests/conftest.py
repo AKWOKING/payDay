@@ -37,6 +37,24 @@ TestAsyncSessionLocal = async_sessionmaker(
 )
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def reset_shared_counters() -> AsyncGenerator[None, None]:
+    """Isolate the shared counter/limiter singletons between test cases.
+
+    The app-global store is process-wide (a rate-limit or PIN bucket must not
+    leak from one test into the next). Tests that want a *shared* budget test
+    it explicitly by constructing stores over a shared fakeredis server.
+    """
+    from payday.core.counters import reset_counter_store
+    from payday.core.ratelimit import reset_rate_limiter
+
+    reset_counter_store()
+    reset_rate_limiter()
+    yield
+    reset_counter_store()
+    reset_rate_limiter()
+
+
 @pytest_asyncio.fixture(scope="function")
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     async with test_engine.begin() as conn:

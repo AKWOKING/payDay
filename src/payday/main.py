@@ -6,15 +6,21 @@ from fastapi.exceptions import RequestValidationError
 
 from payday.core.config import settings
 from payday.core.database import Base, engine
+from payday.core.counters import ensure_counters_ready
 from payday.core.exceptions import PayDayException
 from payday.core.logging import logger
+from payday.core.redis_client import close_redis
 from payday.schemas.common import ProblemDetail
 from payday.api.v1.router import api_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Create tables if not existing (useful for local dev / testing)
+    # Startup: validate the shared counter store BEFORE serving traffic.
+    # In production this refuses to start when Redis is required but
+    # unreachable (fail-closed) — see docs/LAUNCH_BLOCKER_ROADMAP.md WS-0.
+    await ensure_counters_ready()
+    # Create tables if not existing (useful for local dev / testing)
     logger.info(f"Starting {settings.PROJECT_NAME} v{settings.VERSION} [{settings.ENVIRONMENT}]")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -22,6 +28,7 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     logger.info("Shutting down PayDay backend.")
+    await close_redis()
     await engine.dispose()
 
 
@@ -276,7 +283,9 @@ _ERROR_RESPONSES = {
     404: {"model": ProblemDetail, "description": "Not Found"},
     409: {"model": ProblemDetail, "description": "Conflict — e.g. idempotency or state transition"},
     422: {"model": ProblemDetail, "description": "Validation Error"},
+    429: {"model": ProblemDetail, "description": "Too Many Requests — rate limit exceeded (Retry-After set)"},
     500: {"model": ProblemDetail, "description": "Internal Server Error"},
+    503: {"model": ProblemDetail, "description": "Service Unavailable — e.g. shared state store down"},
 }
 
 app.include_router(api_router, prefix=settings.API_V1_STR, responses=_ERROR_RESPONSES)

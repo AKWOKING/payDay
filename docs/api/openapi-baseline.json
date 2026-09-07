@@ -2757,6 +2757,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -2766,6 +2776,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -2864,6 +2884,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -2873,6 +2903,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -3050,6 +3090,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -3059,6 +3109,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -3168,6 +3228,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -3177,6 +3247,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -3322,6 +3402,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -3331,6 +3421,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -3448,6 +3548,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -3457,6 +3567,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -3566,6 +3686,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -3575,6 +3705,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -3684,6 +3824,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -3693,6 +3843,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -3791,6 +3951,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -3800,6 +3970,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "summary": "User Login",
@@ -3883,6 +4063,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -3892,6 +4082,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -3990,6 +4190,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -3999,6 +4209,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "summary": "Refresh Access Token",
@@ -4092,6 +4312,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -4101,6 +4331,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "summary": "Register New User & Create Central Wallet",
@@ -4194,6 +4434,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -4203,6 +4453,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -4312,6 +4572,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -4321,6 +4591,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -4409,6 +4689,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -4418,6 +4708,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -4516,6 +4816,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -4525,6 +4835,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -4623,6 +4943,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -4632,6 +4962,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "summary": "Simulate MTN MoMo USSD Approval or Rejection",
@@ -4725,6 +5065,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -4734,6 +5084,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "summary": "Simulate Orange Money Payment Approval or Rejection",
@@ -4864,6 +5224,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -4873,6 +5243,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -4971,6 +5351,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -4980,6 +5370,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "summary": "Public Fee & Cost Calculator",
@@ -5063,6 +5463,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -5072,6 +5482,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "summary": "Health & Liveness Probe",
@@ -5155,6 +5575,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -5164,6 +5594,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "summary": "Public System Information for Landing Page",
@@ -5247,6 +5687,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -5256,6 +5706,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -5354,6 +5814,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -5363,6 +5833,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -5451,6 +5931,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -5460,6 +5950,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -5556,6 +6056,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -5565,6 +6075,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -5653,6 +6173,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -5662,6 +6192,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -5823,6 +6363,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -5832,6 +6382,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -5931,6 +6491,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -5940,6 +6510,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -6038,6 +6618,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -6047,6 +6637,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "security": [
@@ -6145,6 +6745,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -6154,6 +6764,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "summary": "MTN MoMo Asynchronous Callback Listener",
@@ -6247,6 +6867,16 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -6256,6 +6886,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
           }
         },
         "summary": "Orange Money IPN Callback Listener",

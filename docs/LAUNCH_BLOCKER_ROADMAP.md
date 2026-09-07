@@ -1,9 +1,30 @@
 # PayDay — Launch-Blocker Roadmap
 
-**Version:** 1.0
+**Version:** 1.1
 **Date:** 2026-09-07
 **Owner:** Backend
-**Status:** Proposed — awaiting product decisions (§2)
+**Status:** In progress — **WS-0 core, WS-3 (except owner notification) and
+WS-5 are implemented and tested** (2026-09-07); the rest remains proposed but
+**still awaits the product decisions in §2**, especially D1 (SMS), D6/D7 (KYC),
+D21 (Redis) and D18 (pilot volume).
+
+---
+
+## 0. Implementation status (2026-09-07)
+
+Updated after the WS-0 / WS-3 / WS-5 build. See
+`docs/reports/SPRINT_5_REDIS_AND_THROTTLING.md` for the work record.
+
+| Workstream | Status | Remaining before "done" |
+| --- | --- | --- |
+| WS-0 | 🟢 Core done | CI `redis:7` service job written in `ci.yml` but **unverified** — workflows cannot be pushed/run until the GitHub `workflows` permission is restored (R8) |
+| WS-3 (LB-6) | 🟢 Implemented | Deliberately **not** done: deliverable 3 (notify the account owner on threshold breach) — needs WS-1/notification delivery (D1) |
+| WS-5 (LB-4) | 🟢 Implemented | Confirm D-extra (24h TTL default is in place); production Redis (D21) |
+| WS-1/2/4/6/7 | 🔴 Not started | Gated on D1/D6-D12/D21/D18 per §5 |
+
+Test baseline: **121 passed, 2 skipped** (up from 100 passed, 1 skipped —
+21 new tests in `tests/test_sprint5_*`; one extra skip is the real-Redis
+integration test that runs when `PAYDAY_TEST_REDIS_URL` is set, as CI does).
 
 ---
 
@@ -199,6 +220,7 @@ second engineer is available.
 ### WS-0 — Shared infrastructure: Redis and rate limiting
 
 **Blocks:** LB-1, LB-4, LB-6 · **Est:** 3–4 days · **Decision:** D21
+**Status 2026-09-07:** implemented (core), see §0 status table.
 
 Today the only shared mutable state is a process-local dict. Everything that
 needs a counter — PIN attempts, login attempts, OTP attempts, OTP storage —
@@ -319,6 +341,8 @@ staging, and its `Notification` row reflects the provider's actual response.
 ### WS-3 — LB-6: throttle authentication
 
 **Est:** 2 days (after WS-0)
+**Status 2026-09-07:** implemented except deliverable 3 (owner notification —
+blocked on WS-1/D1).
 
 **Deliverables**
 
@@ -412,6 +436,8 @@ here or delete it.
 ### WS-5 — LB-4: move the PIN counter to Redis
 
 **Est:** 1–2 days (after WS-0) · **Small, but closes an AMBER condition**
+**Status 2026-09-07:** implemented — 24h TTL default is in
+(`PIN_FAILURE_TTL_SECONDS`); confirm the D-extra recommendation with product.
 
 Replace `TransactionManager._failed_pin_attempts` (`transaction_manager.py:49`)
 with an atomic Redis counter: `INCR pin:fail:{user_id}` + `EXPIRE`. Clear on

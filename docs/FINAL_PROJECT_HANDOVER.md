@@ -48,8 +48,8 @@ simulator), Angular admin back-office (KYC, reconciliation, freezes, reversals).
 | Encryption | AES-256-GCM for PII at rest | Active |
 | API contract | OpenAPI 3.1, RFC 7807 errors | Active |
 | Container | Multi-stage Docker, non-root | Built, unbuilt in CI so far |
-| **Redis 7** | **Specified, NOT wired** | **See §9.2** |
-| **Celery** | **Specified, NOT wired** | **See §9.2** |
+| **Redis 7** | **Wired for shared counters** (login throttle, PIN lockout) | **See §9.2** |
+| **Celery** | **Specified, NOT wired** (task queue still in-process) | **See §9.2** |
 
 ---
 
@@ -110,20 +110,21 @@ uvicorn payday.main:app --host 0.0.0.0 --port 8000
 - Swagger UI — `/docs` · ReDoc — `/redoc` · Spec — `/openapi.json`
 - Health — `/api/v1/public/health`
 
-### Docker Compose (PostgreSQL)
+### Docker Compose (PostgreSQL + Redis)
 
 ```bash
 docker compose up --build
 ```
 
-Brings up `db` (Postgres 15, health-gated), `migrate` (one-shot
-`alembic upgrade head`, gated on db health), and `api` (gated on migrations
-completing). No Redis service is defined — see §9.2.
+Brings up `db` (Postgres 15, health-gated), `redis` (Redis 7, health-gated),
+`migrate` (one-shot `alembic upgrade head`, gated on db health), and `api`
+(gated on migrations and Redis health — the app fails closed if Redis is
+required but unreachable). See §9.2.
 
 ### Tests
 
 ```bash
-pytest -q                                  # all 101
+pytest -q -p no:logging                    # all suite (121 passed / 2 skipped as of 2026-09-07)
 pytest tests/test_sprint4_load_capacity.py -s   # with latency output
 ```
 
@@ -198,7 +199,8 @@ do **not** auto-reverse; confirm with the provider first.
 **Wallet auto-frozen.**
 Five consecutive bad PINs freeze the wallet and dispatch a security alert.
 Unfreeze via `POST /api/v1/admin/wallets/{wallet_id}/status` after identity
-verification. Note the counter is per-process — see §9.2.
+verification. The counter is shared across replicas via the Redis counter
+store (see §9.2); without Redis in production the app refuses to start.
 
 **Suspected webhook replay.**
 Webhooks are HMAC-SHA256 verified with anti-replay guards. Check `audit_logs` for
@@ -221,17 +223,30 @@ for 200 concurrent reads. These exclude network and PostgreSQL and **do not
 establish a production p95**. A load test against PostgreSQL 15 with realistic
 pooling is required before pilot.
 
-### 9.2 Redis and Celery are not wired — *blocks horizontal scaling*
-`services/task_queue.py` is an in-process simulation. The PIN-attempt counter in
-`transaction_manager.py` is an in-memory dict.
+### 9.2 Redis is wired for shared counters; Celery is still not
+**Updated 2026-09-07 (WS-0 / WS-3 / WS-5).** The shared counter store is now
+real infrastructure, not an aspiration:
 
-> **The API cannot currently run more than one replica.** The 5-attempt PIN
-> lockout is per-process, so N replicas give an attacker 5N attempts before any
-> freeze. Queued work also does not survive a restart.
-
-Either move the counter to Redis, or formally accept single-replica operation and
-record it as a capacity ceiling. `docker-compose.yml` defines no Redis service
-rather than ship a broker nothing connects to.
+- **What it does:** the login throttle (per-phone 5/15 min, per-IP 20/15 min)
+  and the PIN lockout counter now live in `payday.core.counters`
+  (`COUNTER_BACKEND=redis` in production). N replicas enforce **one** combined
+  budget — the 5N-attempt window is closed, and `POST /auth/login` is no longer
+  unbounded. `GET /api/v1/public/health` reports the store's status.
+- **Fail-closed:** if `ENVIRONMENT=production` the app refuses to start without
+  `COUNTER_BACKEND=redis`, and if Redis is unreachable it refuses to start
+  (verified by the `test_sprint5_shared_infrastructure` suite and by launching
+  `uvicorn` with the bad configuration). There is no silent in-memory fallback
+  in production; the memory store is an explicit dev/test backend.
+- **Still not wired — Celery:** `services/task_queue.py` remains an in-process
+  simulation. Queued work does not survive a restart. This is separate from the
+  PIN counter and still blocks durable notification retries (R3).
+- **What production still needs (D21):** product approval for Redis + a
+  provisioned instance with auth/TLS, `COUNTER_BACKEND=redis`,
+  `REDIS_URL`/`REDIS_REQUIRED=true`, `TRUSTED_PROXY_IPS` set to the real load
+  balancer, and login limits agreed. The 24h PIN-failure TTL (`PIN_FAILURE_TTL_SECONDS`)
+  is the roadmap's recommended default (D-extra) — confirm with product.
+- `docker-compose.yml` now defines the `redis:7-alpine` service and the API
+  waits on its healthcheck.
 
 ### 9.3 UBA Bank adapter — Phase 2
 The factory returns a clear `CHANNEL_NOT_AVAILABLE`. The port interface
@@ -287,13 +302,16 @@ listed in §4 of the guide with recommended resolutions.
 
 **AMBER.** The ledger holds under concurrency and fault injection, value is
 conserved end-to-end, reconciliation detects variance, and the schema matches the
-models.
+models. WS-0/WS-3/WS-5 (shared Redis counters, login throttling, cross-replica
+PIN lockout) are implemented and tested as of 2026-09-07 — see
+`docs/reports/SPRINT_5_REDIS_AND_THROTTLING.md`.
 
-Two conditions before taking real customer money:
+Two conditions before taking real customer money still stand, plus the
+auth-chain blockers:
 
 1. Load test against PostgreSQL 15 with production-like pooling (§9.1).
-2. Wire Redis for the PIN counter, **or** formally accept single-replica
-   operation (§9.2).
+2. Redis approved and provisioned as production infrastructure (§9.2, D21) and
+   the app launched with `COUNTER_BACKEND=redis`.
 
 ---
 
@@ -302,13 +320,14 @@ Two conditions before taking real customer money:
 - [x] Ledger engine, double-entry, row locking
 - [x] MTN MoMo + Orange Money adapters, HMAC webhooks, anti-replay
 - [x] RBAC back-office, reconciliation engine
-- [x] 101 automated tests, all passing
+- [x] 101 automated tests, all passing (baseline; suite now 121 passed / 2 skipped with WS-0/3/5)
 - [x] Migration/model parity gate
 - [x] Containerization and four CI/CD pipelines
 - [x] OpenAPI 3.1 contract + committed baseline
 - [x] Frontend integration guide — all 19 screens mapped (§9.7)
+- [x] Shared Redis counter store: login throttling + cross-replica PIN lockout (§9.2)
 - [ ] Production load test (§9.1)
-- [ ] Redis-backed PIN counter or accepted single-replica ceiling (§9.2)
+- [ ] Redis approved + provisioned in production (D21) and `COUNTER_BACKEND=redis` deployed (§9.2)
 - [ ] Deployment environment secrets (§9.5)
 - [ ] Production secrets rotated (§9.6)
 - [ ] Password-reset endpoint — launch-blocking (§9.7)

@@ -1,6 +1,16 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from payday.core.config import settings
 from payday.core.database import get_db
+from payday.core.ratelimit import (
+    enforce_rate_limit,
+    get_client_ip,
+    login_ip_key,
+    login_phone_key,
+    refresh_ip_key,
+    register_ip_key,
+    reset_rate_limit,
+)
 from payday.schemas.common import APIResponse
 from payday.schemas.auth import (
     RegisterRequest,
@@ -24,7 +34,14 @@ router = APIRouter(prefix="/auth", tags=["Authentication & Profile"])
     summary="Register New User & Create Central Wallet",
     description="Registers a new customer, hashes credentials, encrypts KYC document number, and auto-generates their primary XAF wallet.",
 )
-async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
+async def register(req: RegisterRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    # Throttle registration spam per source IP (WS-3). No per-phone bucket here:
+    # duplicate registrations must keep returning 409, not 429.
+    await enforce_rate_limit(
+        register_ip_key(get_client_ip(request)),
+        settings.REGISTER_RATE_LIMIT_IP,
+        settings.REGISTER_RATE_LIMIT_IP_WINDOW,
+    )
     user, wallet = await auth_service.register_user(db, req)
     return APIResponse(
         success=True,
@@ -47,8 +64,26 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
     summary="User Login",
     description="Authenticates user with phone number and password. Returns JWT access token (15 mins) and refresh token (7 days).",
 )
-async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(req: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    # LB-6: login was completely unthrottled. Two independent buckets:
+    # per-phone-number (defeats one-account spraying from many IPs) and
+    # per-source-IP (defeats one-host spraying of many accounts).
+    await enforce_rate_limit(
+        login_phone_key(req.phone_number),
+        settings.LOGIN_RATE_LIMIT_PHONE,
+        settings.LOGIN_RATE_LIMIT_PHONE_WINDOW,
+    )
+    await enforce_rate_limit(
+        login_ip_key(get_client_ip(request)),
+        settings.LOGIN_RATE_LIMIT_IP,
+        settings.LOGIN_RATE_LIMIT_IP_WINDOW,
+    )
+
     tokens = await auth_service.login_user(db, req)
+
+    # A successful login resets the per-account failure counter (not the
+    # per-IP bucket, which remains the windowed budget for the whole host).
+    await reset_rate_limit(login_phone_key(req.phone_number))
     return APIResponse(
         success=True,
         message="Login successful",
@@ -62,7 +97,13 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     summary="Refresh Access Token",
     description="Issues a fresh access token using a valid refresh token.",
 )
-async def refresh_token(req: RefreshTokenRequest, db: AsyncSession = Depends(get_db)):
+async def refresh_token(req: RefreshTokenRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    # Throttle token refresh per source IP (WS-3).
+    await enforce_rate_limit(
+        refresh_ip_key(get_client_ip(request)),
+        settings.REFRESH_RATE_LIMIT_IP,
+        settings.REFRESH_RATE_LIMIT_IP_WINDOW,
+    )
     tokens = await auth_service.refresh_tokens(db, req.refresh_token)
     return APIResponse(
         success=True,

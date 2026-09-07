@@ -1,10 +1,14 @@
 import uuid
 from decimal import Decimal
 from datetime import datetime, timezone
-from typing import Optional, List, Tuple, Set, Dict
+from typing import Optional, List, Tuple, Set
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
+
+from payday.core.config import settings
+from payday.core.counters import get_counter_store
+from payday.core.ratelimit import pin_failure_key
 
 from payday.models.user import User, KycStatus, UserStatus
 from payday.models.wallet import Wallet, WalletStatus
@@ -35,6 +39,7 @@ from payday.core.exceptions import (
     UserNotFoundError,
     DuplicateTransactionError,
     InvalidStateTransitionError,
+    RedisUnavailableError,
 )
 from payday.core.logging import logger
 
@@ -44,9 +49,6 @@ class TransactionManager:
     Orchestrates money-movement operations, external channel adapter requests,
     webhook callback processing, and the transaction state machine.
     """
-
-    # In-memory tracker for consecutive failed PIN attempts (backed by Redis in distributed clusters)
-    _failed_pin_attempts: Dict[str, int] = {}
 
     # Allowed valid transitions in the transaction lifecycle
     ALLOWED_TRANSITIONS = {
@@ -243,11 +245,25 @@ class TransactionManager:
             raise PinNotSetError()
 
         if not verify_pin(req.pin, user.pin_hash):
-            current_fails = TransactionManager._failed_pin_attempts.get(user.user_id, 0) + 1
-            TransactionManager._failed_pin_attempts[user.user_id] = current_fails
-            logger.warning(f"[SECURITY] Failed PIN attempt {current_fails}/5 for user {user.user_id}")
+            # WS-5 / LB-4: the failure counter lives in the shared counter store
+            # (Redis in production) so N replicas enforce ONE combined 5-attempt
+            # budget instead of 5 attempts per replica.
+            try:
+                fail_result = await get_counter_store().incr(
+                    pin_failure_key(user.user_id), settings.PIN_FAILURE_TTL_SECONDS
+                )
+            except Exception as exc:
+                # Fail closed: without the shared counter we cannot prove how
+                # many attempts have been made, so the transaction is refused.
+                raise RedisUnavailableError() from exc
 
-            if current_fails >= 5:
+            current_fails = fail_result.count
+            logger.warning(
+                f"[SECURITY] Failed PIN attempt {current_fails}/{settings.PIN_FAILURE_LIMIT} "
+                f"for user {user.user_id}"
+            )
+
+            if current_fails >= settings.PIN_FAILURE_LIMIT:
                 # 5th failed attempt -> Auto-freeze wallet
                 user_wallet = await wallet_engine.get_wallet_by_user_id(db, user.user_id)
                 wallet = await wallet_engine.get_wallet_with_lock(db, user_wallet.wallet_id, require_active=False)
@@ -273,10 +289,12 @@ class TransactionManager:
                 await db.commit()
                 raise WalletFrozenError("Your wallet has been suspended due to 5 consecutive failed PIN attempts.")
 
-            raise InvalidPinError(f"Invalid transaction PIN. Attempt {current_fails} of 5.")
+            raise InvalidPinError(
+                f"Invalid transaction PIN. Attempt {current_fails} of {settings.PIN_FAILURE_LIMIT}."
+            )
 
-        # On valid PIN, clear failed attempts
-        TransactionManager._failed_pin_attempts.pop(user.user_id, None)
+        # On valid PIN, clear failed attempts from the shared store
+        await get_counter_store().delete(pin_failure_key(user.user_id))
 
         # Idempotency check
         idempotency_key = req.idempotency_key or str(uuid.uuid4())

@@ -26,6 +26,20 @@ from payday.schemas.auth import RegisterRequest, LoginRequest, SetPinRequest, To
 from payday.services.audit_service import audit_service
 
 
+# Real bcrypt hash used for the not-found path so the response time does not
+# reveal whether the phone number exists (user-enumeration oracle — WS-3).
+_DUMMY_PASSWORD_HASH: str | None = None
+
+
+def _dummy_password_hash() -> str:
+    global _DUMMY_PASSWORD_HASH
+    if _DUMMY_PASSWORD_HASH is None:
+        _DUMMY_PASSWORD_HASH = get_password_hash(
+            "payday-constant-time-dummy-password"
+        )
+    return _DUMMY_PASSWORD_HASH
+
+
 class AuthService:
     @staticmethod
     async def register_user(db: AsyncSession, req: RegisterRequest) -> Tuple[User, Wallet]:
@@ -92,7 +106,12 @@ class AuthService:
     async def login_user(db: AsyncSession, req: LoginRequest) -> TokenResponse:
         result = await db.execute(select(User).where(User.phone_number == req.phone_number))
         user = result.scalars().first()
-        if not user or not verify_password(req.password, user.password_hash):
+        if not user:
+            # Constant-time: spend the same bcrypt cost as a real check so the
+            # response time does not reveal that the account does not exist.
+            verify_password(req.password, _dummy_password_hash())
+            raise AuthenticationError("Invalid phone number or password")
+        if not verify_password(req.password, user.password_hash):
             raise AuthenticationError("Invalid phone number or password")
 
         if user.status != UserStatus.ACTIVE:

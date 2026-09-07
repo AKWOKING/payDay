@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from fastapi import APIRouter
 from payday.core.config import settings
+from payday.core.counters import get_counter_store
 from payday.schemas.common import APIResponse
 from payday.schemas.public import (
     FeeCalculatorRequest,
@@ -21,13 +22,19 @@ router = APIRouter(prefix="/public", tags=["Public & Landing Page"])
     description="Returns backend server health and timestamp.",
 )
 async def health_check():
+    redis_ok = await get_counter_store().ping()
     return APIResponse(
         success=True,
         message="PayDay Core Service Healthy",
         data={
-            "status": "UP",
+            "status": "UP" if redis_ok else "DEGRADED",
             "environment": settings.ENVIRONMENT,
             "version": settings.VERSION,
+            "counter_backend": settings.COUNTER_BACKEND,
+            "redis": {
+                "status": "UP" if redis_ok else "DOWN",
+                "backend": settings.COUNTER_BACKEND,
+            },
             "timestamp": datetime.now(timezone.utc).isoformat(),
         },
     )

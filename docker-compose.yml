@@ -3,17 +3,13 @@
 #
 # Services:
 #   db        PostgreSQL 15, the production-target datastore.
+#   redis     Redis 7 — shared counter store (login throttle + PIN lockout).
+#             The API refuses to start without it (fail-closed), so the api
+#             service waits for the healthcheck before starting.
 #   migrate   One-shot Alembic `upgrade head`, gated on db health.
-#   api       FastAPI application, gated on migrations completing.
+#   api       FastAPI application, gated on migrations + redis health.
 #
-# NOTE ON REDIS / CELERY
-# ----------------------
-# The architecture calls for Redis 7 + Celery, but the application does not
-# currently connect to either: `services/task_queue.py` is an in-process
-# simulation and the PIN-attempt counter in `services/transaction_manager.py`
-# is an in-memory dict. No Redis service is defined here, because a broker
-# nothing talks to would be misleading. See docs/FINAL_PROJECT_HANDOVER.md
-# ("Known Gaps") — this is the blocker for running more than one API replica.
+# Celery remains aspirational: `services/task_queue.py` is still in-process.
 # =============================================================================
 
 services:
@@ -40,6 +36,20 @@ services:
       retries: 12
       start_period: 10s
 
+  redis:
+    image: redis:7-alpine
+    container_name: payday-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "no"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
   migrate:
     build:
       context: .
@@ -64,12 +74,19 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       DEBUG: ${DEBUG:-False}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-payday_user}:${POSTGRES_PASSWORD:-payday_password}@db:5432/${POSTGRES_DB:-payday_db}
+      # Shared counter store (Redis 7) — fail-closed: api waits on the
+      # healthcheck and the app refuses to start if Redis is unreachable.
+      COUNTER_BACKEND: ${COUNTER_BACKEND:-redis}
+      REDIS_URL: redis://redis:6379/0
+      REDIS_REQUIRED: "true"
       # Override both of these in any non-local environment.
       SECRET_KEY: ${SECRET_KEY:-payday-super-secret-development-key-change-in-production-min32chars}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-payday_aes256_secret_key_32bytes!}
