@@ -24,15 +24,20 @@ class Settings(BaseSettings):
     ENCRYPTION_KEY: str = "payday_aes256_secret_key_32bytes!"
 
     # CORS
+    # Explicit allowlist. Do NOT add "*" here: combined with
+    # allow_credentials=True, Starlette reflects the caller's Origin back,
+    # which lets any site issue credentialed cross-origin requests.
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:4200",
         "http://127.0.0.1:4200",
         "http://localhost:3000",
         "http://localhost:8000",
         "http://localhost:8080",
-        "https://*.e2b.app",
-        "*"
     ]
+
+    # Pattern for ephemeral preview/sandbox hosts, which have no fixed origin.
+    # Anchored so that e.g. "https://e2b.app.evil.com" does not match.
+    BACKEND_CORS_ORIGIN_REGEX: str = r"^https://[a-z0-9-]+\.e2b\.app$"
 
     # Currency & Limits (XAF)
     DEFAULT_CURRENCY: str = "XAF"

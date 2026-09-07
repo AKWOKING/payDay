@@ -46,13 +46,23 @@ PayDay is an integrated, neutral e-wallet bridging **MTN Mobile Money**, **Orang
     lifespan=lifespan,
 )
 
-# CORS Configuration for Angular & Flutter
+# CORS Configuration for Angular & Flutter.
+#
+# Origins come from the configured allowlist rather than "*". A wildcard here
+# is not merely permissive: because allow_credentials=True, Starlette responds
+# by reflecting the caller's Origin header and setting
+# Access-Control-Allow-Credentials: true — so any website could issue
+# credentialed cross-origin calls to this financial API and read the replies.
+#
+# Native clients (Flutter, server-to-server) are unaffected: CORS is enforced
+# by browsers only.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Permissive for multi-client & sandbox preview
+    allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_origin_regex=settings.BACKEND_CORS_ORIGIN_REGEX,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID"],
 )
 
 
@@ -206,7 +216,7 @@ async def root():
                                     <h5 class="mb-0 text-warning"><i class="fa-solid fa-mobile-screen-button me-2"></i>MTN MoMo</h5>
                                     <span class="badge bg-success">Adapter Active</span>
                                 </div>
-                                <small class="text-secondary">RequestToPay collection & Transfer disbursement API ready for Sprint 2.</small>
+                                <small class="text-secondary">RequestToPay collection &amp; Transfer disbursement, HMAC-verified webhooks with anti-replay.</small>
                             </div>
                         </div>
                         <div class="col-md-4">
@@ -215,7 +225,7 @@ async def root():
                                     <h5 class="mb-0 text-warning" style="color: #f97316 !important;"><i class="fa-solid fa-wallet me-2"></i>Orange Money</h5>
                                     <span class="badge bg-success">Adapter Active</span>
                                 </div>
-                                <small class="text-secondary">Web Payment initiation & Payout webhook listeners ready for Sprint 3.</small>
+                                <small class="text-secondary">Web Payment initiation &amp; payout webhook listeners, multi-channel bridge live.</small>
                             </div>
                         </div>
                         <div class="col-md-4">
@@ -230,17 +240,19 @@ async def root():
                     </div>
 
                     <div class="card p-4 shadow-sm">
-                        <h5 class="mb-3"><i class="fa-solid fa-shield-halved text-success me-2"></i>Sprint 1 Architecture & Ledger Status</h5>
+                        <h5 class="mb-3"><i class="fa-solid fa-shield-halved text-success me-2"></i>Platform Status &mdash; Sprints 1&ndash;4 Complete</h5>
                         <ul class="list-unstyled text-secondary mb-0">
-                            <li class="mb-2"><i class="fa-solid fa-check text-success me-2"></i><strong>Pessimistic Concurrency:</strong> Row-level locking (<code>SELECT FOR UPDATE</code>) validated against 50 parallel withdrawal attacks (Zero double-spending).</li>
-                            <li class="mb-2"><i class="fa-solid fa-check text-success me-2"></i><strong>PII Encryption at Rest:</strong> National ID & Passport credentials encrypted with AES-256-GCM.</li>
-                            <li class="mb-2"><i class="fa-solid fa-check text-success me-2"></i><strong>Ledger Invariant:</strong> Balance mathematically bounded to transaction log records with database check constraints.</li>
-                            <li class="mb-2"><i class="fa-solid fa-check text-success me-2"></i><strong>Multi-Client Support:</strong> JWT authentication & CORS pre-configured for Flutter & Angular.</li>
+                            <li class="mb-2"><i class="fa-solid fa-check text-success me-2"></i><strong>Pessimistic Concurrency:</strong> Row-level locking (<code>SELECT FOR UPDATE</code>) validated against 50 parallel withdrawal attacks (zero double-spending).</li>
+                            <li class="mb-2"><i class="fa-solid fa-check text-success me-2"></i><strong>PII Encryption at Rest:</strong> National ID &amp; passport credentials encrypted with AES-256-GCM, returned masked only.</li>
+                            <li class="mb-2"><i class="fa-solid fa-check text-success me-2"></i><strong>Chaos Verified:</strong> Telco partitions, timeouts and sustained outages leave no stranded holds &mdash; value conserved under concurrent fault injection.</li>
+                            <li class="mb-2"><i class="fa-solid fa-check text-success me-2"></i><strong>Schema Parity Gate:</strong> Migrations diffed against the ORM models in CI, so production never runs on a drifted schema.</li>
+                            <li class="mb-2"><i class="fa-solid fa-check text-success me-2"></i><strong>Contract Locked:</strong> OpenAPI 3.1 baseline committed; removing an operation or adding a required field fails the build.</li>
+                            <li class="mb-2"><i class="fa-solid fa-circle-exclamation text-warning me-2"></i><strong>Pilot Readiness: AMBER</strong> &mdash; production load test and Redis-backed PIN counter outstanding. See <code>docs/FINAL_PROJECT_HANDOVER.md</code>.</li>
                         </ul>
                     </div>
 
                     <footer class="text-center text-secondary mt-5">
-                        <small>PayDay e-Wallet • Cameroon (XAF) • Sprint 1 Completed</small>
+                        <small>PayDay e-Wallet • Cameroon (XAF) • Sprints 1–4 Complete • 101 automated tests</small>
                     </footer>
                 </div>
             </div>
@@ -250,5 +262,21 @@ async def root():
     """
 
 
-# Include API v1 router
-app.include_router(api_router, prefix=settings.API_V1_STR)
+# Include API v1 router.
+#
+# The error responses are declared here rather than on each operation so that
+# `ProblemDetail` is published in components/schemas. Without this the RFC 7807
+# envelope every endpoint actually returns is absent from the contract, and
+# generated Flutter/Angular SDKs get no typed error model — each client then
+# hand-rolls its own error parsing against an undocumented shape.
+_ERROR_RESPONSES = {
+    400: {"model": ProblemDetail, "description": "Bad Request — RFC 7807 Problem Details"},
+    401: {"model": ProblemDetail, "description": "Unauthorized — missing or invalid credentials"},
+    403: {"model": ProblemDetail, "description": "Forbidden — insufficient role or ownership"},
+    404: {"model": ProblemDetail, "description": "Not Found"},
+    409: {"model": ProblemDetail, "description": "Conflict — e.g. idempotency or state transition"},
+    422: {"model": ProblemDetail, "description": "Validation Error"},
+    500: {"model": ProblemDetail, "description": "Internal Server Error"},
+}
+
+app.include_router(api_router, prefix=settings.API_V1_STR, responses=_ERROR_RESPONSES)
