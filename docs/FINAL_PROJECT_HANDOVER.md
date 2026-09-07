@@ -253,11 +253,33 @@ nothing. See `docs/CI_CD_PIPELINE_STRATEGY.md` §7.
 `SECRET_KEY` and `ENCRYPTION_KEY` are placeholders. Replace before any
 deployment.
 
-### 9.7 Frontend screen mapping incomplete
-`docs/FRONTEND_INTEGRATION_GUIDE.md` maps every endpoint, payload, and error
-code, but the Figma screen/node references are placeholders — the design file
-requires authentication and was not accessible. Marked `<!-- FIGMA: … -->` in
-that document.
+### 9.7 Six designed features have no backend
+`docs/FRONTEND_INTEGRATION_GUIDE.md` §4 maps all 19 Figma screens against the
+live contract. Most map cleanly; six designed features cannot be built because
+no endpoint exists:
+
+| Gap | Screen | Missing capability |
+| --- | --- | --- |
+| §4.1 | Login | PIN-based login, **and any password/PIN reset at all** |
+| §4.2 | Dashboard, Transaction History | P2P "Send", bill payments, bank channel (UBA is Phase 2) |
+| §4.3 | Notifications Feed | Notification categories and **read/unread state** |
+| §4.4 | Registration Page | `referral_code` field (currently silently discarded) |
+| §4.5 | Verify Account 1 & 2 | **File upload for ID documents and selfie** — the largest gap |
+| §4.7 | Receipt screens | Recipient-name resolution for a destination MSISDN |
+
+Two are launch-blocking irrespective of the design:
+
+- **No password reset exists anywhere in the API.** A user who forgets their
+  password is permanently locked out. (A `ChangePasswordRequest` schema is
+  defined in `schemas/auth.py` but no route uses it.)
+- **KYC reviewers have no documents to review.** `POST /kyc/submit` accepts only
+  a document *number*; the admin queue can show a masked string and nothing
+  else, so identity verification cannot actually be performed.
+
+A further seven items need a design adjustment rather than backend work — fee
+direction on deposits, FCFA/XAF label inconsistency, the password prompt on PIN
+change, client-side PDF generation, and unsupported profile items. All are
+listed in §4 of the guide with recommended resolutions.
 
 ---
 
@@ -284,11 +306,13 @@ Two conditions before taking real customer money:
 - [x] Migration/model parity gate
 - [x] Containerization and four CI/CD pipelines
 - [x] OpenAPI 3.1 contract + committed baseline
-- [x] Frontend integration guide (screens pending — §9.7)
+- [x] Frontend integration guide — all 19 screens mapped (§9.7)
 - [ ] Production load test (§9.1)
 - [ ] Redis-backed PIN counter or accepted single-replica ceiling (§9.2)
 - [ ] Deployment environment secrets (§9.5)
 - [ ] Production secrets rotated (§9.6)
+- [ ] Password-reset endpoint — launch-blocking (§9.7)
+- [ ] KYC document upload — launch-blocking (§9.7)
 - [ ] UBA Bank adapter (Phase 2)
 
 ---
