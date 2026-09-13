@@ -24,6 +24,11 @@ Updated after the WS-0 / WS-3 / WS-5 build and the WS-2 build. See
 | WS-2 (LB-7) | 🟢 Implemented | Deliverable 6 (per-`jti` denylist for single-device logout) deliberately **not** built — logout is account-wide; no PIN-reset call site exists yet (see the sprint report) |
 | WS-1/4/6/7 | 🔴 Not started | WS-4 additionally depends on WS-2, which is now done. WS-1/6/7 gated on D1/D6-D12/D18 per §5 |
 
+**New on 2026-09-13:** LB-8…LB-11 (money-path reconnaissance, §1) and the
+sequenced execution plan for everything remaining — see
+`docs/MVP_EXECUTION_ROADMAP.md`. That document is now the canonical order of
+work; this one remains the defect register and decision list.
+
 Test baseline: **133 passed, 2 skipped** (from 100/1 before this work; 21 new
 tests in `tests/test_sprint5_*`, 12 in `tests/test_sprint6_session_revocation.py`).
 One skip is the real-Redis integration test that runs when
@@ -90,6 +95,24 @@ credential.
 
 This is worse than LB-4. LB-4 raises an attacker's PIN budget from 5 to 5N;
 LB-6 makes the password budget unbounded today, on one replica.
+
+### LB-8 … LB-11 — found 2026-09-13 (money path reconnaissance)
+
+Registered while planning the MVP sequence in `docs/MVP_EXECUTION_ROADMAP.md`,
+which is now the canonical record with the evidence, the reproduced arithmetic
+and the fix plan. Summary, because these belong in the blocker list:
+
+| ID | Finding | Severity |
+| --- | --- | --- |
+| **LB-8** | **The platform cannot move real money.** Both adapters are module-level singletons built with `use_mock=True` (`adapters/mtn_momo.py:290`, `adapters/orange_money.py:283`) and `core/config.py` has no telco credentials, base URLs or environment switch at all. The live code paths are unreachable in production; every test passes because the mock branch returns before the payload is built. | 🔴 |
+| **LB-9** | **Three representations of the same amount.** XAF is ISO 4217 exponent 0 (no centimes). MTN is sent `str(amount)` (`"1000.00"`), Orange is sent `int(amount)` — which **truncates** `1000.99` to `1000` — while the ledger quantises to 0.01 and accepts sub-franc requests (`schemas/transaction.py:11`). Silent, one-directional reconciliation drift. | 🔴 |
+| **LB-10** | **MSISDN format wrong for at least one operator.** `_clean_msisdn` only strips `+`, sending `237699123456` to both; Orange Money documents the 9-digit local form for `subscriber_msisdn`. No operator/prefix validation either. | 🟠 |
+| **LB-11** | **No test asserts an outbound telco payload** (`grep requesttopay\|webpayment\|subscriber_msisdn tests/` → nothing), which is precisely why LB-8/9/10 survived 133 green tests. | 🟠 |
+
+The landing page served by `main.py` advertises "MTN MoMo — Adapter Active" and
+"Orange Money — Adapter Active". Until LB-8 is fixed that is a demo claim.
+
+---
 
 ### LB-7 — newly found
 
