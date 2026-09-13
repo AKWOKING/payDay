@@ -356,13 +356,14 @@ def test_live_mode_requires_every_credential() -> None:
     assert "ORANGE_MERCHANT_KEY" in message
 
 
-def test_live_mode_is_interlocked_until_callbacks_can_be_verified() -> None:
-    """M1 task A8 gate: real money must not start on an unverifiable callback path.
+def test_live_mode_is_startable_now_that_callbacks_are_verified() -> None:
+    """A8 landed: the callback path is verified, so live mode is no longer refused.
 
-    MTN does not sign callbacks and Orange verifies by echoing a per-order
-    notif_token; neither control exists yet, so both adapters reject live
-    callbacks. Starting in live mode would therefore strand every transaction in
-    PROCESSING — this test pins the interlock until A8 removes it.
+    It is still gated — on operator credentials, a public HTTPS callback URL, and
+    the status sweep that rescues lost notifications (see
+    `test_sprint7_callback_verification.py`, which owns that requirement). What
+    this test pins is that a *fully* configured deployment is not blocked by a
+    blanket refusal any more.
     """
     fully_configured = settings.model_copy(
         update={
@@ -379,11 +380,10 @@ def test_live_mode_is_interlocked_until_callbacks_can_be_verified() -> None:
             "ORANGE_MERCHANT_KEY": "mk",
             "ORANGE_CLIENT_ID": "cid",
             "ORANGE_CLIENT_SECRET": "secret",
+            "TELCO_STATUS_SWEEP_ENABLED": True,
         }
     )
-    with pytest.raises(TelcoConfigurationError) as exc:
-        validate_telco_configuration(fully_configured)
-    assert "A8" in str(exc.value)
+    validate_telco_configuration(fully_configured)
 
 
 def test_live_mode_rejects_a_localhost_callback_url() -> None:

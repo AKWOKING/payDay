@@ -1,7 +1,8 @@
 import uuid
 from decimal import Decimal
 from datetime import datetime, timezone
-from typing import Optional, List, Tuple, Set
+import enum
+from typing import Any, Dict, Optional, List, Tuple, Set
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
@@ -42,6 +43,21 @@ from payday.core.exceptions import (
     RedisUnavailableError,
 )
 from payday.core.logging import logger
+from payday.core.money import to_wire_amount_string, whole_xaf
+
+
+class SettlementOutcome(str, enum.Enum):
+    """What a verified provider answer did to a transaction.
+
+    Returned instead of raising, because several of these are *normal* outcomes
+    that must not look like an error to the operator: a duplicate callback, or a
+    transaction the operator has not decided yet.
+    """
+
+    SETTLED = "SETTLED"                  # ledger moved on the operator's answer
+    ALREADY_FINAL = "ALREADY_FINAL"      # duplicate callback; nothing to do
+    INCONCLUSIVE = "INCONCLUSIVE"        # operator has no conclusive status yet
+    AMOUNT_MISMATCH = "AMOUNT_MISMATCH"  # operator reports a different amount; flagged
 
 
 class TransactionManager:
@@ -192,6 +208,9 @@ class TransactionManager:
             external_ref=external_ref,
             failure_reason=failure_reason,
             completed_at=completed_at,
+            provider_order_id=channel_res.provider_order_id,
+            provider_notif_token=channel_res.provider_notif_token,
+            provider_txn_id=channel_res.provider_txn_id,
         )
 
         try:
@@ -389,6 +408,9 @@ class TransactionManager:
             external_ref=external_ref,
             failure_reason=failure_reason,
             completed_at=completed_at,
+            provider_order_id=channel_res.provider_order_id,
+            provider_notif_token=channel_res.provider_notif_token,
+            provider_txn_id=channel_res.provider_txn_id,
         )
 
         try:
@@ -458,9 +480,36 @@ class TransactionManager:
             logger.info(f"[WEBHOOK] Transaction {transaction.transaction_id} already finalized ({transaction.status.value}). Acknowledging duplicate.")
             return transaction
 
-        # Determine target state
-        target_status = TransactionStatus.SUCCESS if payload.status.upper() in ("SUCCESSFUL", "SUCCESS") else TransactionStatus.FAILED
-        
+        return await TransactionManager._apply_settlement(
+            db=db,
+            transaction=transaction,
+            provider_status=payload.status,
+            reason=payload.reason,
+        )
+
+    @staticmethod
+    async def _apply_settlement(
+        db: AsyncSession,
+        transaction: Transaction,
+        provider_status: str,
+        reason: Optional[str] = None,
+    ) -> Transaction:
+        """Move the ledger for one transaction. The only place that may.
+
+        Shared by the mock simulator path (`process_webhook`) and the verified
+        provider path (`settle_from_provider`) so the two cannot drift: both lock
+        the wallet, credit or release, write the audit entry and notify
+        identically.
+
+        Callers are responsible for having established that `provider_status` is
+        conclusive. `process_webhook` is mock-only; `settle_from_provider` checks.
+        """
+        target_status = (
+            TransactionStatus.SUCCESS
+            if provider_status in ("SUCCESS", "SUCCESSFUL")
+            else TransactionStatus.FAILED
+        )
+
         # Enforce State Machine Validation
         TransactionManager.validate_state_transition(transaction.status, target_status)
 
@@ -485,6 +534,7 @@ class TransactionManager:
                     transaction_id=transaction.transaction_id,
                 )
             transaction.status = TransactionStatus.SUCCESS
+            transaction.failure_reason = None
             transaction.completed_at = datetime.now(timezone.utc)
         else:
             # FAILED or REJECTED
@@ -496,10 +546,10 @@ class TransactionManager:
                     amount=transaction.amount,
                     fee=transaction.fee,
                     transaction_id=transaction.transaction_id,
-                    reason=payload.reason or "Partner rejected or timed out",
+                    reason=reason or "Partner rejected or timed out",
                 )
             transaction.status = TransactionStatus.FAILED
-            transaction.failure_reason = payload.reason or "Partner transaction failure"
+            transaction.failure_reason = reason or "Partner transaction failure"
             transaction.completed_at = datetime.now(timezone.utc)
 
         await audit_service.log_action(
@@ -509,8 +559,8 @@ class TransactionManager:
             entity_id=transaction.transaction_id,
             new_state={
                 "status": transaction.status.value,
-                "partner_status": payload.status,
-                "external_ref": payload.external_ref,
+                "partner_status": provider_status,
+                "external_ref": transaction.external_ref,
             },
         )
 
@@ -529,6 +579,95 @@ class TransactionManager:
         await db.commit()
         await db.refresh(transaction)
         return transaction
+
+    @staticmethod
+    async def settle_from_provider(
+        db: AsyncSession,
+        transaction: Transaction,
+        provider_status: str,
+        provider_txn_id: Optional[str] = None,
+        provider_order_id: Optional[str] = None,
+        provider_amount: Optional[Decimal] = None,
+    ) -> Tuple[SettlementOutcome, Transaction]:
+        """Settle on the *operator's* answer, and only on that.
+
+        Called after a status requery, never from a callback body directly. The
+        rules, in order:
+
+        1. A transaction already in a final state is left alone. Duplicate
+           callbacks are expected -- MTN retries any non-2xx response, and both
+           operators document sending the same notification more than once.
+        2. A status that is not conclusive (`PENDING`/`PROCESSING`, or a 404 from
+           the operator's status endpoint, which can simply mean "not readable
+           yet") moves nothing. The money stays where it is.
+        3. An amount that disagrees with ours does not settle: the transaction is
+           flagged for a human and left PROCESSING. Settling a 200 XAF payment
+           against a 20 000 XAF deposit would be far worse than leaving it open.
+        4. Otherwise the ledger moves, with the operator's identifiers recorded.
+
+        The outcome is returned rather than raised, because a duplicate callback
+        and a still-pending payment are normal traffic, not errors.
+        """
+        # Record what the operator told us even when we cannot settle yet: these
+        # are the identifiers support needs to trace a payment.
+        if provider_txn_id and not transaction.provider_txn_id:
+            transaction.provider_txn_id = provider_txn_id
+        if provider_order_id and not transaction.provider_order_id:
+            transaction.provider_order_id = provider_order_id
+
+        if transaction.status in (
+            TransactionStatus.SUCCESS,
+            TransactionStatus.FAILED,
+            TransactionStatus.REVERSED,
+        ):
+            logger.info(
+                f"[SETTLE] Transaction {transaction.transaction_id} is already "
+                f"{transaction.status.value}; ignoring duplicate provider answer."
+            )
+            return SettlementOutcome.ALREADY_FINAL, transaction
+
+        if provider_status not in ("SUCCESS", "FAILED"):
+            logger.info(
+                f"[SETTLE] Transaction {transaction.transaction_id}: provider has no "
+                f"conclusive status yet ({provider_status}); leaving it "
+                f"{transaction.status.value}."
+            )
+            return SettlementOutcome.INCONCLUSIVE, transaction
+
+        if provider_amount is not None and whole_xaf(provider_amount) != whole_xaf(transaction.amount):
+            transaction.failure_reason = (
+                f"AMOUNT_MISMATCH: provider reports "
+                f"{to_wire_amount_string(provider_amount)} XAF, transaction expects "
+                f"{to_wire_amount_string(transaction.amount)} XAF. Not settled; "
+                "needs manual review."
+            )
+            logger.error(
+                f"[SETTLE] AMOUNT MISMATCH on {transaction.transaction_id}: provider "
+                f"reported {provider_amount}, expected {transaction.amount}. Refusing to settle."
+            )
+            await audit_service.log_action(
+                db=db,
+                action="PROVIDER_AMOUNT_MISMATCH",
+                entity_name="Transaction",
+                entity_id=transaction.transaction_id,
+                new_state={
+                    "provider_status": provider_status,
+                    "provider_amount": str(provider_amount),
+                    "expected_amount": str(transaction.amount),
+                    "provider_txn_id": provider_txn_id,
+                },
+            )
+            await db.commit()
+            await db.refresh(transaction)
+            return SettlementOutcome.AMOUNT_MISMATCH, transaction
+
+        await TransactionManager._apply_settlement(
+            db=db,
+            transaction=transaction,
+            provider_status=provider_status,
+            reason=None if provider_status == "SUCCESS" else "Operator reported failure",
+        )
+        return SettlementOutcome.SETTLED, transaction
 
     @staticmethod
     async def get_receipt(db: AsyncSession, user: User, transaction_id: str) -> TransactionReceiptResponse:

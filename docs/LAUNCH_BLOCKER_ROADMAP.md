@@ -112,6 +112,36 @@ and the fix plan. Summary, because these belong in the blocker list:
 The landing page served by `main.py` advertises "MTN MoMo — Adapter Active" and
 "Orange Money — Adapter Active". Until LB-8 is fixed that is a demo claim.
 
+**Status of LB-8…LB-11 (2026-09-13):** fixed in `86539c5` — per-mode telco
+configuration with fail-closed validation, one money authority
+(`core/money.py`), per-operator MSISDN formatting, and 47 tests pinning the
+exact operator payloads (negative control: reintroducing the truncation fails
+four golden tests). Not closed: the endpoints, headers and Orange's ambiguous
+`amount` type are pinned by tests, **not yet confirmed by the operators** — that
+is task A5, which needs real sandbox credentials.
+
+---
+
+### LB-12 … LB-13 — found 2026-09-13 (callback-path reconnaissance)
+
+Found while planning A8. These are the two defects that made a real callback
+either impossible or dangerous, and both are fixed by the same work.
+
+| ID | Finding | Severity |
+| --- | --- | --- |
+| **LB-12** | **The operators' callbacks could not be parsed.** `schemas/transaction.py:90` `WebhookCallbackPayload` is a PayDay-invented shape (`external_ref` and `status` required). A real MTN callback sends `externalId` and `transactionStatus`; a real Orange notification sends exactly `{"status", "notif_token", "txnid"}` — no order id, no reference, no amount. Every genuine callback would have failed validation with 422 and **no transaction would ever have settled**. | 🔴 |
+| **LB-13** | **An unauthenticated request body could credit a wallet.** `transaction_manager.process_webhook` read `payload.status` and credited the ledger from it. Neither operator signs callbacks (MTN signs nothing; Orange echoes a per-order token), so with notifications enabled this was a money-printing endpoint: anyone able to POST JSON could settle a deposit. The only thing preventing exploitation was the A8 interlock refusing to start in live mode. | 🔴 |
+
+**Fixed (A8):** operator-native parsing per adapter, channel-scoped lookup (MTN
+by `externalId`, Orange by the `notif_token` stored at initiation), constant-time
+`notif_token` comparison for Orange, an authoritative status requery that decides
+the outcome, an amount cross-check that refuses to settle a mismatch, and a
+periodic sweep (`services/status_sweep.py`) for notifications that never arrive.
+25 tests in `tests/test_sprint7_callback_verification.py`; negative control:
+making the ledger follow the callback body again fails the forgery test
+(200 where 503 is required). Not closed until A5 confirms the operators send
+these shapes.
+
 ---
 
 ### LB-7 — newly found

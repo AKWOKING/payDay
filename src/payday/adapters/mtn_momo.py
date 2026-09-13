@@ -31,6 +31,7 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
 import httpx
@@ -40,6 +41,7 @@ from payday.adapters.base import (
     ChannelResponse,
     ChannelWithdrawalRequest,
     PaymentChannelAdapter,
+    ProviderCallback,
 )
 from payday.core.config import Settings, settings
 from payday.core.exceptions import PayDayException
@@ -156,13 +158,71 @@ def build_transfer_payload(
 
 
 def map_status(payload: Dict[str, Any]) -> str:
-    """Map an MTN status value onto our four-state vocabulary."""
-    status = str(payload.get("status") or "").upper()
+    """Map an MTN status value onto our four-state vocabulary.
+
+    Handles both MTN shapes: the status endpoint answers with `status`, while the
+    callback body uses `transactionStatus`. Callers must not settle on a callback
+    value anyway (the requery is the authority), but the mapping has to be right
+    so the recorded vendor status is not blanked out.
+    """
+    status = str(
+        payload.get("status") or payload.get("transactionStatus") or ""
+    ).upper()
     if status == "SUCCESSFUL":
         return "SUCCESS"
     if status in {"FAILED", "REJECTED", "EXPIRED", "TIMEOUT"}:
         return "FAILED"
     return "PROCESSING"
+
+
+def _flatten_reason(reason: Any) -> Optional[str]:
+    """MTN sends `reason` as `{"code": ..., "message": ...}` on failures."""
+    if reason is None:
+        return None
+    if isinstance(reason, dict):
+        code = reason.get("code") or reason.get("errorCode")
+        message = reason.get("message") or reason.get("errorMessage")
+        if code and message:
+            return f"{code}: {message}"
+        if message:
+            return str(message)
+        if code:
+            return str(code)
+        return None
+    return str(reason)
+
+
+def parse_callback(body: Dict[str, Any]) -> Optional[ProviderCallback]:
+    """Translate an MTN MoMo callback body, or `None` if it is not one.
+
+    The documented body is::
+
+        {"externalId": "12345", "amount": "100", "currency": "EUR",
+         "financialTransactionId": "1633100230", "transactionStatus": "SUCCESSFUL",
+         "payee": {"partyIdType": "MSISDN", "partyId": "256772123456"}}
+
+    `externalId` is the value *we* sent (the adapter sets it to our transaction
+    id), which is what makes it a safe match key. MTN signs none of this, so the
+    parsed status is a hint only — see `PaymentChannelAdapter.query_status`.
+    """
+    if not isinstance(body, dict):
+        return None
+
+    external_id = body.get("externalId") or body.get("external_id")
+    if not external_id:
+        return None
+
+    status = body.get("transactionStatus") or body.get("status")
+    financial_txn_id = (
+        body.get("financialTransactionId") or body.get("financial_transaction_id")
+    )
+    return ProviderCallback(
+        transaction_id=str(external_id),
+        provider_status=str(status) if status is not None else None,
+        provider_txn_id=str(financial_txn_id) if financial_txn_id else None,
+        reason=_flatten_reason(body.get("reason")),
+        raw=body,
+    )
 
 
 def warn_if_operator_mismatch(phone_number: str, strict: bool) -> None:
@@ -460,8 +520,24 @@ class MTNMoMoAdapter(PaymentChannelAdapter):
     # ------------------------------------------------------------------ #
     # Status & callbacks
     # ------------------------------------------------------------------ #
-    async def query_status(self, channel_ref: str, tx_type: str = "DEPOSIT") -> ChannelResponse:
-        """Authoritative status lookup — the source of truth for reconciliation."""
+    async def query_status(
+        self,
+        channel_ref: str,
+        tx_type: str = "DEPOSIT",
+        order_id: Optional[str] = None,
+        amount: Optional[Decimal] = None,
+    ) -> ChannelResponse:
+        """Authoritative status lookup — the source of truth for settlement.
+
+        `channel_ref` is the `X-Reference-Id` we sent, stored as
+        `Transaction.external_ref`.
+
+        A **404 is not a failure**. MTN answers 404 both for a reference that
+        does not exist and for one that is not visible yet, and a callback can
+        legitimately arrive before the reference becomes readable. Treating it as
+        FAILED would fail transactions the customer actually approved, so it maps
+        to PROCESSING and the caller leaves the ledger alone.
+        """
         if self.use_mock:
             return ChannelResponse(
                 success=True,
@@ -491,18 +567,47 @@ class MTNMoMoAdapter(PaymentChannelAdapter):
         if response.status_code == 200:
             data = response.json()
             status = map_status(data)
+            financial_txn_id = data.get("financialTransactionId")
             return ChannelResponse(
-                success=(status == "SUCCESS"),
+                success=(status in {"SUCCESS", "FAILED"}),
                 channel_ref=channel_ref,
                 status=status,
+                message=f"MTN reports {data.get('status')}",
                 raw_response=data,
+                provider_txn_id=str(financial_txn_id) if financial_txn_id else None,
+            )
+        if response.status_code == 404:
+            return ChannelResponse(
+                success=False,
+                channel_ref=channel_ref,
+                status="PROCESSING",
+                message=(
+                    "MTN does not show this reference yet (404); the request may "
+                    "still be awaiting the customer's approval."
+                ),
+                raw_response={"status_code": 404, "body": response.text},
             )
         return ChannelResponse(
             success=False,
             channel_ref=channel_ref,
-            status="FAILED",
-            message=f"Status query failed with code {response.status_code}",
+            status="PROCESSING",
+            message=f"Status query was inconclusive (HTTP {response.status_code})",
+            raw_response={"status_code": response.status_code, "body": response.text},
         )
+
+    def verify_callback_authenticity(
+        self, callback: ProviderCallback, expected_notif_token: Optional[str]
+    ) -> bool:
+        """MTN signs nothing, so there is no local evidence to check.
+
+        Returning True is only safe because the caller does not act on the
+        callback: it matches `externalId` to a transaction of ours that is still
+        PROCESSING, then re-queries the status endpoint with credentials only we
+        hold and settles on that answer. A forged callback can therefore provoke
+        a lookup, and nothing else. Deliberately *not* a signature check —
+        `verify_webhook_signature` remains the mock-only legacy seam.
+        """
+        return callback.transaction_id is not None
 
     async def verify_webhook_signature(self, headers: Dict[str, str], body: bytes) -> bool:
         """Whether an inbound callback may be trusted.

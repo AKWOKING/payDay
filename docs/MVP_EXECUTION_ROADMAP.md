@@ -412,6 +412,21 @@ delivery, real money, or compliance.
 A1, A2, A3, A4, A5 (+ D26 fee-rounding decision). Everything else already works
 against the mock.
 
+> **Progress (2026-09-13):** A1–A4 done, tested and pushed (`86539c5`) — 47
+> tests pin the operator payloads, with a negative control that reintroduces the
+> truncation to prove they bite. A8 (callback verification, §LB-12/LB-13) is
+> also done: callbacks are parsed per operator, matched, verified, and settled
+> only on the operator's own status answer, with a periodic sweep for
+> notifications that never arrive (which the research showed both vendors
+> document — that requirement is why live mode is still gated, this time on
+> `TELCO_STATUS_SWEEP_ENABLED`). **A5 is the remaining task and it is blocked on
+> credentials**, not on code: MTN sandbox credentials are self-provisioned but
+> production ones need KYC/contract, and Orange needs an RCCM. Until A5 runs,
+> no endpoint, header or status path here is confirmed by an operator.
+>
+> **Migration numbering:** A8 took 004 (`004_provider_callback_refs`), so WS-1
+> and WS-6 take 005 and 006 when they land (R21).
+
 **Exit criteria:** a deposit and a withdrawal complete end-to-end against *both*
 MTN and Orange **sandboxes**, with real callbacks, driven entirely by
 configuration; the golden-payload tests fail if an adapter's request body or

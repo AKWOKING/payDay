@@ -30,9 +30,11 @@ documentation.
 from __future__ import annotations
 
 import base64
+import hmac
 import time
 import uuid
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
 import httpx
@@ -42,6 +44,7 @@ from payday.adapters.base import (
     ChannelResponse,
     ChannelWithdrawalRequest,
     PaymentChannelAdapter,
+    ProviderCallback,
 )
 from payday.core.config import Settings, settings
 from payday.core.exceptions import PayDayException
@@ -154,8 +157,43 @@ def build_payout_payload(
     }
 
 
+def parse_callback(body: Dict[str, Any]) -> Optional[ProviderCallback]:
+    """Translate an Orange Money notification, or `None` if it is not one.
+
+    Orange sends **three fields and nothing else**::
+
+        {"status": "SUCCESS", "notif_token": "dd497bda...", "txnid": "MP150709.1341.A00073"}
+
+    There is no order id, no amount and no reference, which is why the
+    `notif_token` returned at initiation must be stored: it is the only value
+    that ties a notification to an order. A body without it is not an Orange
+    notification and is refused rather than guessed at.
+    """
+    if not isinstance(body, dict):
+        return None
+
+    notif_token = body.get("notif_token")
+    if not notif_token:
+        return None
+
+    status = body.get("status")
+    txnid = body.get("txnid")
+    return ProviderCallback(
+        provider_status=str(status) if status is not None else None,
+        provider_txn_id=str(txnid) if txnid else None,
+        notif_token=str(notif_token),
+        raw=body,
+    )
+
+
 def map_status(payload: Dict[str, Any]) -> str:
-    """Map an Orange status value onto our four-state vocabulary."""
+    """Map an Orange status value onto our four-state vocabulary.
+
+    Documented vocabulary: `INITIATED` (customer has not acted), `PENDING`
+    (customer confirmed, Orange is processing), `SUCCESS`, `FAILED`, `EXPIRED`
+    (confirmed too late). Only the last three are conclusive; the first two must
+    leave the transaction untouched.
+    """
     status = str(payload.get("status") or "").upper()
     if status in {"SUCCESS", "SUCCESSFUL", "COMPLETED"}:
         return "SUCCESS"
@@ -300,6 +338,7 @@ class OrangeMoneyAdapter(PaymentChannelAdapter):
 
         if self.use_mock:
             channel_ref = f"OM-COL-{order_id[-8:]}"
+            notif_token = f"MOCK-NOTIF-{uuid.uuid4().hex[:16].upper()}"
             return ChannelResponse(
                 success=True,
                 channel_ref=channel_ref,
@@ -311,8 +350,11 @@ class OrangeMoneyAdapter(PaymentChannelAdapter):
                     "provider": "ORANGE",
                     "pay_token": f"PAY-TOKEN-{uuid.uuid4().hex[:12].upper()}",
                     "payment_url": f"https://mock-orange.cm/pay/{order_id}",
+                    "notif_token": notif_token,
                     "status": "PENDING_CUSTOMER_PIN",
                 },
+                provider_order_id=order_id,
+                provider_notif_token=notif_token,
             )
 
         payload = build_webpayment_payload(
@@ -347,6 +389,12 @@ class OrangeMoneyAdapter(PaymentChannelAdapter):
                 status="PROCESSING",
                 message="Web payment initialized successfully",
                 raw_response=data,
+                # Both are needed later: `order_id` to re-query the status
+                # endpoint, `notif_token` to recognise the notification. Until
+                # A8 they were discarded, which made an Orange callback
+                # impossible to match to an order.
+                provider_order_id=order_id,
+                provider_notif_token=data.get("notif_token"),
             )
         return ChannelResponse(
             success=False,
@@ -424,12 +472,31 @@ class OrangeMoneyAdapter(PaymentChannelAdapter):
             error_code="ORANGE_PAYOUT_REJECTED",
         )
 
-    async def query_status(self, channel_ref: str, tx_type: str = "DEPOSIT") -> ChannelResponse:
+    async def query_status(
+        self,
+        channel_ref: str,
+        tx_type: str = "DEPOSIT",
+        order_id: Optional[str] = None,
+        amount: Optional[Decimal] = None,
+    ) -> ChannelResponse:
         """Authoritative status lookup.
 
-        The path suffix is configurable: Orange's status endpoint differs between
-        API generations and the API is mid-migration, so hard-coding one would be
-        a guess. Confirmed in sandbox by task A5.
+        The documented contract is a **POST** to
+        `{base}/{ORANGE_STATUS_PATH}` — e.g.
+        `.../orange-money-webpay/cm/v1/transactionstatus` — carrying all three of
+        `{order_id, amount, pay_token}`, and answering
+        `{"status", "order_id", "txnid"}`. `pay_token` is what this codebase
+        stores as `external_ref`; `order_id` and `amount` come from the
+        transaction.
+
+        The path suffix stays configurable because Orange's API is mid-migration
+        and an older generation used `GET /paymentstatus/{payToken}`. That older
+        form differs in verb and body, not just suffix, so it is **not** covered
+        by configuration; if A5 finds it is the contracted generation, this
+        method needs changing. Recorded rather than hidden.
+
+        Orange's documented status response carries **no amount**, so the
+        settlement path cannot cross-check the paid amount for this channel.
         """
         if self.use_mock:
             return ChannelResponse(
@@ -439,27 +506,68 @@ class OrangeMoneyAdapter(PaymentChannelAdapter):
                 message="Mock Orange Money transaction confirmed successful",
             )
 
+        if order_id is None or amount is None:
+            # Without both, the documented contract cannot be satisfied. Sending a
+            # partial body would get a 4xx that looks like a network problem, so
+            # fail loudly and leave the transaction alone instead.
+            return ChannelResponse(
+                success=False,
+                channel_ref=channel_ref,
+                status="PROCESSING",
+                message=(
+                    "Orange status query needs order_id and amount; the "
+                    "transaction does not carry them, so the status is unknown."
+                ),
+            )
+
         endpoint = (
-            self.config.status_path if tx_type == "DEPOSIT" else f"{self.config.payout_path}status"
+            self.config.status_path
+            if tx_type == "DEPOSIT"
+            else f"{self.config.payout_path}status"
         )
         response = await self._request(
-            "GET", f"{self.config.base_url}/{endpoint}/{channel_ref}"
+            "POST",
+            f"{self.config.base_url}/{endpoint}",
+            json_body={
+                "order_id": order_id,
+                "amount": to_wire_amount(amount),
+                "pay_token": channel_ref,
+            },
         )
         if response.status_code == 200:
             data = response.json()
             status = map_status(data)
+            txnid = data.get("txnid")
             return ChannelResponse(
-                success=(status == "SUCCESS"),
+                success=(status in {"SUCCESS", "FAILED"}),
                 channel_ref=channel_ref,
                 status=status,
+                message=f"Orange reports {data.get('status')}",
                 raw_response=data,
+                provider_order_id=data.get("order_id") or order_id,
+                provider_txn_id=str(txnid) if txnid else None,
             )
         return ChannelResponse(
             success=False,
             channel_ref=channel_ref,
-            status="FAILED",
-            message=f"Orange status query failed with code {response.status_code}",
+            status="PROCESSING",
+            message=f"Status query was inconclusive (HTTP {response.status_code})",
+            raw_response={"status_code": response.status_code, "body": response.text},
         )
+
+    def verify_callback_authenticity(
+        self, callback: ProviderCallback, expected_notif_token: Optional[str]
+    ) -> bool:
+        """Constant-time comparison of the echoed `notif_token`.
+
+        This is the control Orange documents: the `notif_token` issued at
+        initiation and echoed in the notification is the only evidence that a
+        notification belongs to an order. `hmac.compare_digest` is used so the
+        comparison does not leak the token through timing.
+        """
+        if not expected_notif_token or not callback.notif_token:
+            return False
+        return hmac.compare_digest(str(expected_notif_token), str(callback.notif_token))
 
     async def verify_webhook_signature(self, headers: Dict[str, str], body: bytes) -> bool:
         """Whether an inbound Orange callback may be trusted.

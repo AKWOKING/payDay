@@ -107,6 +107,17 @@ class Settings(BaseSettings):
     # Absolute, publicly reachable base URL of this API. Required in live mode:
     # operator callbacks cannot reach a relative path.
     PUBLIC_BASE_URL: str = "http://localhost:8000"
+    # Periodic status sweep (M1 / A8). Both MTN and Orange document
+    # notifications that never arrive; without a sweep a transaction whose
+    # callback is lost stays PROCESSING forever — a customer who paid and was
+    # never credited. Required in live mode.
+    TELCO_STATUS_SWEEP_ENABLED: bool = False
+    TELCO_STATUS_SWEEP_INTERVAL_SECONDS: int = 120  # vendors advise ~2 minutes
+    # Do not ask about a transaction younger than the operator's own
+    # confirmation window (Orange documents 4-8s; an MTN USSD prompt waits on
+    # the customer, so minutes).
+    TELCO_STATUS_SWEEP_MIN_AGE_SECONDS: int = 120
+    TELCO_STATUS_SWEEP_BATCH_SIZE: int = 50
     # Reject a number whose prefix belongs to a different operator. Off by
     # default because Cameroon has number portability and published prefix
     # tables disagree — see core/msisdn.py.
@@ -294,18 +305,20 @@ def validate_telco_configuration(settings_: "Settings | None" = None) -> list[st
                 "or non-TLS address, so transactions would never leave PROCESSING."
             )
 
-        # Interlock (M1 task A8). MTN does not sign its callbacks and Orange
-        # verifies by echoing a per-order notif_token; neither control is
-        # implemented yet, so both adapters reject live callbacks rather than
-        # trusting them. Refusing to start makes it impossible to take real money
-        # with an unverified callback path — the failure mode this project keeps
-        # discovering. Remove this gate when A8 lands.
-        raise TelcoConfigurationError(
-            "TELCO_MODE=live is not yet available: operator callback verification "
-            "(M1 task A8) is unimplemented, so inbound callbacks are rejected and "
-            "transactions could never settle. Run the operator sandbox "
-            "(TELCO_MODE=sandbox) until A8 lands — see docs/plans/M1_LIVE_MONEY_PATH_PLAN.md."
-        )
+        # The callback path is verified (A8): operator callbacks are matched,
+        # authenticity is checked, and settlement waits for the operator's own
+        # status answer. What remains is the case where no callback arrives at
+        # all — which both operators document. Without the sweep, such a
+        # transaction stays PROCESSING forever: a customer who paid and was never
+        # credited. That is a precondition for taking real money, not a nicety.
+        if not s.TELCO_STATUS_SWEEP_ENABLED:
+            raise TelcoConfigurationError(
+                "TELCO_MODE=live requires TELCO_STATUS_SWEEP_ENABLED=true: both MTN "
+                "and Orange document notifications that never arrive, and without the "
+                "sweep a transaction whose callback is lost stays PROCESSING forever "
+                "— a customer who paid and was never credited. Set "
+                "TELCO_STATUS_SWEEP_ENABLED=true (see services/status_sweep.py)."
+            )
     else:
         if mode == "sandbox" and not s.MTN_COLLECTION_API_USER:
             warnings.append(

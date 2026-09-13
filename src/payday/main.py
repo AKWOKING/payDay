@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
@@ -12,6 +13,7 @@ from payday.core.logging import logger
 from payday.core.redis_client import close_redis
 from payday.schemas.common import ProblemDetail
 from payday.api.v1.router import api_router
+from payday.services.status_sweep import run_status_sweep_forever
 
 
 @asynccontextmanager
@@ -28,6 +30,14 @@ async def lifespan(app: FastAPI):
     for warning in telco_warnings:
         logger.warning(f"[TELCO] {warning}")
     logger.info(f"Payment channels running in TELCO_MODE={settings.TELCO_MODE}")
+
+    # Periodic authoritative status sweep (M1 / A8). Both operators document
+    # notifications that never arrive; without this, a transaction whose callback
+    # is lost stays PROCESSING and the customer's money is in limbo. Started only
+    # when configured, so tests and mock mode are unaffected.
+    sweep_task = None
+    if settings.TELCO_STATUS_SWEEP_ENABLED:
+        sweep_task = asyncio.create_task(run_status_sweep_forever())
     # Create tables if not existing (useful for local dev / testing)
     logger.info(f"Starting {settings.PROJECT_NAME} v{settings.VERSION} [{settings.ENVIRONMENT}]")
     async with engine.begin() as conn:
@@ -35,6 +45,12 @@ async def lifespan(app: FastAPI):
     logger.info("Database schema initialized.")
     yield
     # Shutdown
+    if sweep_task is not None:
+        sweep_task.cancel()
+        try:
+            await sweep_task
+        except asyncio.CancelledError:
+            pass
     logger.info("Shutting down PayDay backend.")
     await close_redis()
     await engine.dispose()
