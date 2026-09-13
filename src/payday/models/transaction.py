@@ -44,6 +44,15 @@ class Transaction(TimeStampedModel):
     external_ref = Column(String(100), nullable=True, index=True)
     failure_reason = Column(String(255), nullable=True)
     
+    # Operator-side identifiers (M1 / A8). Written at initiation, used to match a
+    # callback and to re-query the operator's own status endpoint -- the ledger
+    # only moves on that answer, never on the callback body.
+    #   MTN:    provider_txn_id = financialTransactionId (external_ref holds the X-Reference-Id)
+    #   Orange: provider_order_id + provider_notif_token (external_ref holds the pay_token)
+    provider_order_id = Column(String(100), nullable=True)
+    provider_notif_token = Column(String(128), nullable=True, index=True)
+    provider_txn_id = Column(String(100), nullable=True, index=True)
+
     extra_data = Column(JSON, nullable=True, default=dict)
     completed_at = Column(DateTime(timezone=True), nullable=True)
 

@@ -1,9 +1,39 @@
 # PayDay — Launch-Blocker Roadmap
 
-**Version:** 1.0
+**Version:** 1.1
 **Date:** 2026-09-07
 **Owner:** Backend
-**Status:** Proposed — awaiting product decisions (§2)
+**Status:** In progress — **WS-0 core, WS-3 (except owner notification) and
+WS-5 are implemented and tested** (2026-09-07); the rest remains proposed but
+**still awaits the product decisions in §2**, especially D1 (SMS), D6/D7 (KYC),
+D21 (Redis) and D18 (pilot volume).
+
+---
+
+## 0. Implementation status (2026-09-13)
+
+Updated after the WS-0 / WS-3 / WS-5 build and the WS-2 build. See
+`docs/reports/SPRINT_5_REDIS_AND_THROTTLING.md` and
+`docs/reports/SPRINT_6_TOKEN_REVOCATION.md` for the work records.
+
+| Workstream | Status | Remaining before "done" |
+| --- | --- | --- |
+| WS-0 | 🟢 Core done | CI `redis:7` service job written in `ci.yml` but **unverified** — workflows cannot be pushed/run until the GitHub `workflows` permission is restored (R8) |
+| WS-3 (LB-6) | 🟢 Implemented | Deliberately **not** done: deliverable 3 (notify the account owner on threshold breach) — needs WS-1/notification delivery (D1) |
+| WS-5 (LB-4) | 🟢 Implemented | Confirm D-extra (24h TTL default is in place); production Redis (D21) |
+| WS-2 (LB-7) | 🟢 Implemented | Deliverable 6 (per-`jti` denylist for single-device logout) deliberately **not** built — logout is account-wide; no PIN-reset call site exists yet (see the sprint report) |
+| WS-1/4/6/7 | 🔴 Not started | WS-4 additionally depends on WS-2, which is now done. WS-1/6/7 gated on D1/D6-D12/D18 per §5 |
+
+**New on 2026-09-13:** LB-8…LB-11 (money-path reconnaissance, §1) and the
+sequenced execution plan for everything remaining — see
+`docs/MVP_EXECUTION_ROADMAP.md`. That document is now the canonical order of
+work; this one remains the defect register and decision list.
+
+Test baseline: **133 passed, 2 skipped** (from 100/1 before this work; 21 new
+tests in `tests/test_sprint5_*`, 12 in `tests/test_sprint6_session_revocation.py`).
+One skip is the real-Redis integration test that runs when
+`PAYDAY_TEST_REDIS_URL` is set, as CI does; the other is the `alg=none` test the
+local JOSE library refuses to mint.
 
 ---
 
@@ -47,7 +77,7 @@ authentication layer, both found by reading the code rather than the docs.
 | LB-4 | PIN counter is per-process — 5N attempts on N replicas | 🟠 | `transaction_manager.py:49` `_failed_pin_attempts: Dict[str, int] = {}` |
 | LB-5 | No load test against PostgreSQL | 🟠🔒 | Sprint 4 numbers are in-process ASGI over SQLite |
 | **LB-6** | **Login is completely unthrottled** | 🔴 | `auth_service.py:92-96` — no counter, no lockout, no rate limit |
-| **LB-7** | **Refresh tokens cannot be revoked** | 🔴 | `auth_service.py:116-140` — validity is "user exists and is ACTIVE" |
+| **LB-7** | **Refresh tokens cannot be revoked** | ✅ | Fixed 2026-09-13 — `users.token_version` + `tv` claim; validity is no longer status-only |
 
 ### LB-6 — newly found
 
@@ -66,7 +96,62 @@ credential.
 This is worse than LB-4. LB-4 raises an attacker's PIN budget from 5 to 5N;
 LB-6 makes the password budget unbounded today, on one replica.
 
+### LB-8 … LB-11 — found 2026-09-13 (money path reconnaissance)
+
+Registered while planning the MVP sequence in `docs/MVP_EXECUTION_ROADMAP.md`,
+which is now the canonical record with the evidence, the reproduced arithmetic
+and the fix plan. Summary, because these belong in the blocker list:
+
+| ID | Finding | Severity |
+| --- | --- | --- |
+| **LB-8** | **The platform cannot move real money.** Both adapters are module-level singletons built with `use_mock=True` (`adapters/mtn_momo.py:290`, `adapters/orange_money.py:283`) and `core/config.py` has no telco credentials, base URLs or environment switch at all. The live code paths are unreachable in production; every test passes because the mock branch returns before the payload is built. | 🔴 |
+| **LB-9** | **Three representations of the same amount.** XAF is ISO 4217 exponent 0 (no centimes). MTN is sent `str(amount)` (`"1000.00"`), Orange is sent `int(amount)` — which **truncates** `1000.99` to `1000` — while the ledger quantises to 0.01 and accepts sub-franc requests (`schemas/transaction.py:11`). Silent, one-directional reconciliation drift. | 🔴 |
+| **LB-10** | **MSISDN format wrong for at least one operator.** `_clean_msisdn` only strips `+`, sending `237699123456` to both; Orange Money documents the 9-digit local form for `subscriber_msisdn`. No operator/prefix validation either. | 🟠 |
+| **LB-11** | **No test asserts an outbound telco payload** (`grep requesttopay\|webpayment\|subscriber_msisdn tests/` → nothing), which is precisely why LB-8/9/10 survived 133 green tests. | 🟠 |
+
+The landing page served by `main.py` advertises "MTN MoMo — Adapter Active" and
+"Orange Money — Adapter Active". Until LB-8 is fixed that is a demo claim.
+
+**Status of LB-8…LB-11 (2026-09-13):** fixed in `86539c5` — per-mode telco
+configuration with fail-closed validation, one money authority
+(`core/money.py`), per-operator MSISDN formatting, and 47 tests pinning the
+exact operator payloads (negative control: reintroducing the truncation fails
+four golden tests). Not closed: the endpoints, headers and Orange's ambiguous
+`amount` type are pinned by tests, **not yet confirmed by the operators** — that
+is task A5, which needs real sandbox credentials.
+
+---
+
+### LB-12 … LB-13 — found 2026-09-13 (callback-path reconnaissance)
+
+Found while planning A8. These are the two defects that made a real callback
+either impossible or dangerous, and both are fixed by the same work.
+
+| ID | Finding | Severity |
+| --- | --- | --- |
+| **LB-12** | **The operators' callbacks could not be parsed.** `schemas/transaction.py:90` `WebhookCallbackPayload` is a PayDay-invented shape (`external_ref` and `status` required). A real MTN callback sends `externalId` and `transactionStatus`; a real Orange notification sends exactly `{"status", "notif_token", "txnid"}` — no order id, no reference, no amount. Every genuine callback would have failed validation with 422 and **no transaction would ever have settled**. | 🔴 |
+| **LB-13** | **An unauthenticated request body could credit a wallet.** `transaction_manager.process_webhook` read `payload.status` and credited the ledger from it. Neither operator signs callbacks (MTN signs nothing; Orange echoes a per-order token), so with notifications enabled this was a money-printing endpoint: anyone able to POST JSON could settle a deposit. The only thing preventing exploitation was the A8 interlock refusing to start in live mode. | 🔴 |
+
+**Fixed (A8):** operator-native parsing per adapter, channel-scoped lookup (MTN
+by `externalId`, Orange by the `notif_token` stored at initiation), constant-time
+`notif_token` comparison for Orange, an authoritative status requery that decides
+the outcome, an amount cross-check that refuses to settle a mismatch, and a
+periodic sweep (`services/status_sweep.py`) for notifications that never arrive.
+25 tests in `tests/test_sprint7_callback_verification.py`; negative control:
+making the ledger follow the callback body again fails the forgery test
+(200 where 503 is required). Not closed until A5 confirms the operators send
+these shapes.
+
+---
+
 ### LB-7 — newly found
+
+> **Fixed 2026-09-13 (WS-2).** Tokens now carry a `tv` claim compared against
+> `users.token_version`, which `revoke_all_sessions()` increments; logout,
+> suspension/closure and (when it ships) password reset therefore evict. The
+> text below is the original finding, kept as the record of what was wrong and
+> why the ordering mattered. Per-device revocation remains unimplemented.
+> See `docs/reports/SPRINT_6_TOKEN_REVOCATION.md`.
 
 `refresh_tokens` decodes the JWT, looks the user up, and issues a new pair if
 the user is `ACTIVE`. There is no denylist, no `jti` tracking, no token
@@ -179,6 +264,8 @@ independent. Three shared pieces of infrastructure sit underneath them:
 ```
 
 **The critical path is `WS-0 → LB-3 → LB-7 → LB-1 → LB-5`.**
+(WS-0 and LB-7 are done as of 2026-09-13; the remaining chain is LB-3 → LB-1 →
+LB-5.)
 
 Two non-obvious dependencies drive that:
 
@@ -187,7 +274,8 @@ Two non-obvious dependencies drive that:
    rows and marks them `SENT` with no outbound call), so LB-1 built today would
    have no way to reach anyone. LB-3 is a prerequisite of LB-1, not a parallel
    track.
-2. **Password reset is not secure before LB-7.** Covered above.
+2. **Password reset is not secure before LB-7.** Covered above — LB-7 is now
+   done, so this dependency is discharged for whoever picks up WS-4.
 
 **LB-2 (KYC) is fully independent** and is the natural parallel track if a
 second engineer is available.
@@ -199,6 +287,7 @@ second engineer is available.
 ### WS-0 — Shared infrastructure: Redis and rate limiting
 
 **Blocks:** LB-1, LB-4, LB-6 · **Est:** 3–4 days · **Decision:** D21
+**Status 2026-09-07:** implemented (core), see §0 status table.
 
 Today the only shared mutable state is a process-local dict. Everything that
 needs a counter — PIN attempts, login attempts, OTP attempts, OTP storage —
@@ -292,6 +381,15 @@ staging, and its `Notification` row reflects the provider's actual response.
 ### WS-2 — LB-7: revocable sessions
 
 **Blocks:** LB-1 · **Est:** 2–3 days
+**Status 2026-09-13:** implemented. Deliverables 1–5 are in; deliverable 6
+(per-`jti` denylist) was deliberately not built — logout is account-wide, and
+that limitation is documented rather than glossed. The migration is revision
+**003**, not the 004 planned below: the plan assumed WS-1 (notification
+delivery) would land first, but WS-2 was executed first and the chain head was
+still `002_fix_schema_drift`. The "PIN reset" call site is not wired yet —
+`POST /auth/set-pin` is a first-time *set* for new accounts, so revoking there
+would sign a user out mid-onboarding; the PIN-reset call site belongs to the
+LB-1 flow (D15). See `docs/reports/SPRINT_6_TOKEN_REVOCATION.md`.
 
 **Deliverables**
 
@@ -319,6 +417,8 @@ staging, and its `Notification` row reflects the provider's actual response.
 ### WS-3 — LB-6: throttle authentication
 
 **Est:** 2 days (after WS-0)
+**Status 2026-09-07:** implemented except deliverable 3 (owner notification —
+blocked on WS-1/D1).
 
 **Deliverables**
 
@@ -412,6 +512,8 @@ here or delete it.
 ### WS-5 — LB-4: move the PIN counter to Redis
 
 **Est:** 1–2 days (after WS-0) · **Small, but closes an AMBER condition**
+**Status 2026-09-07:** implemented — 24h TTL default is in
+(`PIN_FAILURE_TTL_SECONDS`); confirm the D-extra recommendation with product.
 
 Replace `TransactionManager._failed_pin_attempts` (`transaction_manager.py:49`)
 with an atomic Redis counter: `INCR pin:fail:{user_id}` + `EXPIRE`. Clear on
@@ -530,7 +632,7 @@ available.
 | P1 | WS-3 LB-6 login throttling | 2 | P0 |
 | P1 | WS-5 LB-4 PIN counter | 1–2 | P0 |
 | P2 | WS-1 LB-3 SMS delivery | 4–6 | **D1 contract signed** ⏳ |
-| P3 | WS-2 LB-7 token revocation | 2–3 | — (can overlap P2) |
+| P3 | WS-2 LB-7 token revocation | 2–3 | — (can overlap P2) · **done 2026-09-13** |
 | P4 | WS-4 LB-1 password reset | 4–5 | P2 + P3 |
 | ‖ | WS-6 LB-2 KYC upload | 5–7 | D6–D12 ⏳ |
 | P5 | WS-7 LB-5 load test | 3–5 | all + staging deployed |
@@ -575,7 +677,9 @@ rest sits on.
 - [ ] LB-4 PIN lockout enforced across replicas, proven by test
 - [ ] LB-5 capacity measured on PostgreSQL against an agreed SLO
 - [ ] LB-6 login throttled per account and per IP; owner notified
-- [ ] LB-7 sessions revocable; logout is real
+- [x] LB-7 sessions revocable; logout is real — `token_version` + `POST /auth/logout`,
+      12 tests incl. re-activation and cross-account isolation (2026-09-13).
+      Per-device revocation is **not** implemented: logout ends every session.
 - [ ] CI/CD pipelines have **actually run green** at least once
 - [ ] Production secrets rotated off the `.env.example` lineage
 - [ ] On-call owner named and alerting wired (D22)

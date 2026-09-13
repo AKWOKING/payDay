@@ -3,6 +3,7 @@ from payday.adapters.base import (
     ChannelDepositRequest,
     ChannelWithdrawalRequest,
     ChannelResponse,
+    ProviderCallback,
 )
 from payday.adapters.mtn_momo import MTNMoMoAdapter, mtn_momo_adapter
 from payday.adapters.orange_money import OrangeMoneyAdapter, orange_money_adapter
@@ -13,6 +14,7 @@ __all__ = [
     "ChannelDepositRequest",
     "ChannelWithdrawalRequest",
     "ChannelResponse",
+    "ProviderCallback",
     "MTNMoMoAdapter",
     "mtn_momo_adapter",
     "OrangeMoneyAdapter",

@@ -43,6 +43,25 @@ class AuthenticationError(PayDayException):
         )
 
 
+class SessionRevokedError(PayDayException):
+    """401 — the token was minted before the account's last session revocation.
+
+    Deliberately distinct from `AuthenticationError`: clients can then tell
+    "your session was ended deliberately, sign in again" (logout elsewhere,
+    admin suspension, password reset) from "this token expired", and support
+    can see which of the two actually happened.
+    """
+
+    def __init__(self, detail: str = "Session has been revoked. Please sign in again."):
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=detail,
+            code="SESSION_REVOKED",
+            title="Session Revoked",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
 class PermissionDeniedError(PayDayException):
     def __init__(self, detail: str = "You do not have permission to access this resource"):
         super().__init__(
@@ -177,4 +196,31 @@ class InvalidStateTransitionError(PayDayException):
             code="INVALID_STATE_TRANSITION",
             title="Invalid State Transition",
             extra={"current_status": current_status, "target_status": target_status},
+        )
+
+
+class RateLimitError(PayDayException):
+    """429 — WS-3 / LB-6: an authentication endpoint was hit too often."""
+
+    def __init__(self, limit: int, retry_after: int):
+        super().__init__(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many requests. Try again in {max(1, retry_after)} seconds.",
+            code="RATE_LIMITED",
+            title="Rate Limit Exceeded",
+            headers={"Retry-After": str(max(1, retry_after))},
+            extra={"limit": limit, "retry_after_seconds": max(1, retry_after)},
+        )
+
+
+class RedisUnavailableError(PayDayException):
+    """503 — the shared counter store is down; operations fail closed."""
+
+    def __init__(self, detail: str = "Shared state store is unavailable. Please retry later."):
+        super().__init__(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=detail,
+            code="REDIS_UNAVAILABLE",
+            title="Service Unavailable",
+            headers={"Retry-After": "5"},
         )

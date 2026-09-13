@@ -5,10 +5,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from payday.core.database import get_db
-from payday.core.security import decode_token
+from payday.core.security import decode_token, token_version_matches
 from payday.core.exceptions import (
     AuthenticationError,
     PermissionDeniedError,
+    SessionRevokedError,
     UserNotFoundError,
     KycRequiredError,
 )
@@ -39,6 +40,15 @@ async def get_current_user(
 
     if user.status != UserStatus.ACTIVE:
         raise PermissionDeniedError(f"User account is {user.status.value.lower()}")
+
+    # WS-2 / LB-7: the token must have been minted at the account's current
+    # token version. A logout, admin suspension or password reset increments
+    # it, so every token issued before that moment stops working here — the
+    # access token included, not just the refresh token. Checked after the
+    # status check so a suspended account still reports suspension rather than
+    # a generic revocation.
+    if not token_version_matches(payload, user.token_version):
+        raise SessionRevokedError()
 
     return user
 

@@ -1,6 +1,8 @@
 # PayDay — Frontend Integration Guide
 
-**Version:** 2.0 · **Date:** 2026-09-07
+**Version:** 2.1 · **Date:** 2026-09-13
+**Changed in 2.1:** `POST /auth/logout` and the `SESSION_REVOKED` error code —
+sessions are now revocable server-side, and logout is account-wide.
 **Contract:** OpenAPI 3.1 · `/openapi.json` · baseline snapshot at `docs/api/openapi-baseline.json`
 **Design:** [PayDay UI/UX Design](https://www.figma.com/design/I5wNdk5TDrfvNNOvpyAszM/PayDay-UI-UX-Design?node-id=0-1&m=dev)
 **Audience:** Flutter mobile, Angular landing page, Angular admin back-office
@@ -108,6 +110,9 @@ one. This is the difference between a flaky network and a double withdrawal.
 | --- | ---: | --- | --- |
 | `VALIDATION_ERROR` | 422 | Invalid body/params | Field errors in `extra.errors[]` — map to form fields |
 | `AUTHENTICATION_FAILED` | 401 | Missing/invalid/expired token | Refresh once, then log out |
+| `SESSION_REVOKED` | 401 | Session ended server-side (logout, suspension, password reset) | **Do not refresh.** Clear credentials, go to Login |
+| `RATE_LIMITED` | 429 | Too many attempts on an auth endpoint | Wait `Retry-After` seconds before retrying; do not spin |
+| `REDIS_UNAVAILABLE` | 503 | Shared state store down; the request failed closed | Transient — retry later, do not treat as user error |
 | `PERMISSION_DENIED` | 403 | Role insufficient | Hide the affordance |
 | `USER_NOT_FOUND` | 404 | No such user | |
 | `USER_ALREADY_EXISTS` | 409 | Phone already registered | Offer login |
@@ -440,7 +445,34 @@ immediately — to PIN setup or to Verify Account — without an extra round tri
 Access tokens last 30 minutes. On 401 `AUTHENTICATION_FAILED`, call
 `POST /auth/refresh` **once**; if that fails, clear credentials and return here.
 
+**Two 401s are not the same** (added 2026-09-13, session revocation):
+
+| `code` | Meaning | Client action |
+| --- | --- | --- |
+| `AUTHENTICATION_FAILED` | Token missing, malformed or expired | Refresh once; if the refresh also fails, clear and go to Login |
+| `SESSION_REVOKED` | The session was ended server-side — logout, admin suspension, or a password reset | **Do not retry or refresh.** Clear credentials and go to Login |
+
+Treating `SESSION_REVOKED` as a refreshable error turns a deliberate eviction
+into a refresh loop that cannot succeed.
+
 Store tokens in `flutter_secure_storage`, never `SharedPreferences`.
+
+### Logout
+
+`POST /api/v1/auth/logout` with the access token. No request body.
+
+```json
+{ "user_id": "...", "sessions_revoked": true, "token_version": 3 }
+```
+
+Clearing tokens locally is **not** logout — a refresh token left valid in an
+attacker's hands would keep minting access tokens for up to 7 days. Call this
+endpoint, and clear `flutter_secure_storage` whether it returns 200 or 401 (a
+401 here means the session was already ended).
+
+Revocation is **account-wide**: signing out on the phone also signs the user out
+on their other devices. Per-device logout is not implemented; do not offer a
+"log out other devices" control.
 
 **See §4.1 — the PIN-based login on this screen is not supported by the API.**
 
