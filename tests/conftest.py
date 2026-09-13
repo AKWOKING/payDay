@@ -138,11 +138,19 @@ async def test_admin(db_session: AsyncSession) -> User:
 
 @pytest_asyncio.fixture
 def user_auth_headers(test_user: User) -> dict:
-    token = create_access_token(subject=test_user.user_id, role=test_user.role.value)
+    token = create_access_token(
+        subject=test_user.user_id,
+        role=test_user.role.value,
+        token_version=test_user.token_version,
+    )
     return {"Authorization": f"Bearer {token}"}
 
 
 @pytest_asyncio.fixture
 def admin_auth_headers(test_admin: User) -> dict:
-    token = create_access_token(subject=test_admin.user_id, role=test_admin.role.value)
+    token = create_access_token(
+        subject=test_admin.user_id,
+        role=test_admin.role.value,
+        token_version=test_admin.token_version,
+    )
     return {"Authorization": f"Bearer {token}"}

@@ -54,9 +54,12 @@ async def _make_customer(db_session, name: str, phone: str) -> tuple[User, dict]
     await db_session.commit()
     await db_session.refresh(user)
 
-    headers = {
-        "Authorization": f"Bearer {create_access_token(subject=user.user_id, role=user.role.value)}"
-    }
+    token = create_access_token(
+        subject=user.user_id,
+        role=user.role.value,
+        token_version=user.token_version,
+    )
+    headers = {"Authorization": f"Bearer {token}"}
     return user, headers
 
 

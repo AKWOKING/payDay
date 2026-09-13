@@ -33,7 +33,12 @@ def verify_pin(plain_pin: str, hashed_pin: str) -> bool:
     return verify_password(plain_pin, hashed_pin)
 
 
-def create_access_token(subject: Union[str, Any], role: str, expires_delta: Optional[timedelta] = None) -> str:
+def create_access_token(
+    subject: Union[str, Any],
+    role: str,
+    token_version: int,
+    expires_delta: Optional[timedelta] = None,
+) -> str:
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
@@ -42,6 +47,7 @@ def create_access_token(subject: Union[str, Any], role: str, expires_delta: Opti
     to_encode = {
         "sub": str(subject),
         "role": role,
+        "tv": int(token_version),
         "type": "access",
         "exp": expire,
         "iat": datetime.now(timezone.utc)
@@ -50,7 +56,12 @@ def create_access_token(subject: Union[str, Any], role: str, expires_delta: Opti
     return encoded_jwt
 
 
-def create_refresh_token(subject: Union[str, Any], role: str, expires_delta: Optional[timedelta] = None) -> str:
+def create_refresh_token(
+    subject: Union[str, Any],
+    role: str,
+    token_version: int,
+    expires_delta: Optional[timedelta] = None,
+) -> str:
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
@@ -59,12 +70,33 @@ def create_refresh_token(subject: Union[str, Any], role: str, expires_delta: Opt
     to_encode = {
         "sub": str(subject),
         "role": role,
+        "tv": int(token_version),
         "type": "refresh",
         "exp": expire,
         "iat": datetime.now(timezone.utc)
     }
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
+
+
+def token_version_matches(payload: Dict[str, Any], current_token_version: int) -> bool:
+    """True when a decoded token was issued at the user's current token version.
+
+    `token_version` is the counter incremented by `AuthService.revoke_all_sessions`.
+    A token minted before a revocation carries a lower `tv` claim and is refused
+    — which is what makes logout, admin suspension and password reset evict
+    sessions instead of merely asking clients to forget them.
+
+    Tokens minted before WS-2 shipped carry no `tv` claim at all; they are read
+    as version 0 rather than rejected, so deploying this change does not log
+    every user out. That is not a weaker rule: any revocation moves the account
+    above 0, and those tokens are then refused along with everything else. A
+    non-numeric `tv` is a mismatch (fail closed) rather than an error.
+    """
+    try:
+        return int(payload.get("tv", 0)) == int(current_token_version)
+    except (TypeError, ValueError):
+        return False
 
 
 def decode_token(token: str) -> Dict[str, Any]:

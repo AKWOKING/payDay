@@ -1,6 +1,6 @@
 from datetime import timedelta
 from decimal import Decimal
-from typing import Tuple
+from typing import Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from payday.core.config import settings
@@ -11,11 +11,13 @@ from payday.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
+    token_version_matches,
 )
 from payday.core.encryption import encryption_service
 from payday.core.exceptions import (
     UserAlreadyExistsError,
     AuthenticationError,
+    SessionRevokedError,
     UserNotFoundError,
     InvalidPinError,
     PermissionDeniedError,
@@ -117,8 +119,13 @@ class AuthService:
         if user.status != UserStatus.ACTIVE:
             raise PermissionDeniedError(f"Account is {user.status.value.lower()}. Please contact support.")
 
-        access_token = create_access_token(subject=user.user_id, role=user.role.value)
-        refresh_token = create_refresh_token(subject=user.user_id, role=user.role.value)
+        token_version = int(user.token_version or 0)
+        access_token = create_access_token(
+            subject=user.user_id, role=user.role.value, token_version=token_version
+        )
+        refresh_token = create_refresh_token(
+            subject=user.user_id, role=user.role.value, token_version=token_version
+        )
 
         return TokenResponse(
             access_token=access_token,
@@ -143,8 +150,20 @@ class AuthService:
         if not user or user.status != UserStatus.ACTIVE:
             raise AuthenticationError("User not found or inactive")
 
-        access_token = create_access_token(subject=user.user_id, role=user.role.value)
-        new_refresh_token = create_refresh_token(subject=user.user_id, role=user.role.value)
+        # WS-2 / LB-7: the whole point of revocation. A refresh token stolen
+        # before a logout, suspension or password reset must not be able to mint
+        # a new pair afterwards — otherwise revocation is decorative and a
+        # password reset leaves the attacker logged in for the token's lifetime.
+        if not token_version_matches(payload, user.token_version):
+            raise SessionRevokedError()
+
+        token_version = int(user.token_version or 0)
+        access_token = create_access_token(
+            subject=user.user_id, role=user.role.value, token_version=token_version
+        )
+        new_refresh_token = create_refresh_token(
+            subject=user.user_id, role=user.role.value, token_version=token_version
+        )
 
         return TokenResponse(
             access_token=access_token,
@@ -156,6 +175,62 @@ class AuthService:
             has_pin=bool(user.pin_hash),
             kyc_status=user.kyc_status.value,
         )
+
+    @staticmethod
+    async def revoke_all_sessions(
+        db: AsyncSession,
+        user_id: str,
+        reason: str,
+        actor_id: Optional[str] = None,
+        commit: bool = True,
+    ) -> int:
+        """Invalidate every access and refresh token issued for this account.
+
+        Implemented by incrementing `users.token_version`; every token carries
+        the value it was minted at in its `tv` claim, so they all fail
+        `token_version_matches` from the next request onwards.
+
+        Coarse by design (WS-2 deliverable 6's per-`jti` denylist, which would
+        allow ending a single device's session, is not implemented): after this
+        call the user is signed out everywhere, including the caller. That is
+        the intended behaviour for logout, suspension and password reset.
+
+        `commit=False` lets a caller fold the revocation into its own
+        transaction — the admin status change does exactly that, so the
+        suspension and the eviction either both land or neither does.
+
+        Returns the new token version.
+        """
+        # FOR UPDATE serialises concurrent revocations on PostgreSQL. SQLite
+        # ignores the clause (there is no row-lock concept and one connection is
+        # writing anyway). A lost increment between two simultaneous
+        # revocations would be harmless in any case: both intend to invalidate
+        # everything issued before them, which a single increment achieves.
+        result = await db.execute(
+            select(User).where(User.user_id == user_id).with_for_update()
+        )
+        user = result.scalars().first()
+        if not user:
+            raise UserNotFoundError()
+
+        previous = int(user.token_version or 0)
+        user.token_version = previous + 1
+
+        await audit_service.log_action(
+            db=db,
+            action="SESSIONS_REVOKED",
+            entity_name="User",
+            entity_id=user_id,
+            actor_id=actor_id or user_id,
+            old_state={"token_version": previous},
+            new_state={"token_version": previous + 1, "reason": reason},
+        )
+
+        if commit:
+            await db.commit()
+            await db.refresh(user)
+
+        return int(user.token_version)
 
     @staticmethod
     async def set_transaction_pin(db: AsyncSession, user_id: str, req: SetPinRequest) -> User:

@@ -43,6 +43,25 @@ class AuthenticationError(PayDayException):
         )
 
 
+class SessionRevokedError(PayDayException):
+    """401 — the token was minted before the account's last session revocation.
+
+    Deliberately distinct from `AuthenticationError`: clients can then tell
+    "your session was ended deliberately, sign in again" (logout elsewhere,
+    admin suspension, password reset) from "this token expired", and support
+    can see which of the two actually happened.
+    """
+
+    def __init__(self, detail: str = "Session has been revoked. Please sign in again."):
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=detail,
+            code="SESSION_REVOKED",
+            title="Session Revoked",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
 class PermissionDeniedError(PayDayException):
     def __init__(self, detail: str = "You do not have permission to access this resource"):
         super().__init__(

@@ -113,6 +113,40 @@ async def refresh_token(req: RefreshTokenRequest, request: Request, db: AsyncSes
 
 
 @router.post(
+    "/logout",
+    response_model=APIResponse[dict],
+    summary="Logout (Revoke All Sessions)",
+    description=(
+        "Server-side logout. Increments the account's token version, which "
+        "immediately invalidates every access and refresh token issued before "
+        "this request — **including the one used to call it**. The client must "
+        "discard its stored tokens; a later refresh returns 401 SESSION_REVOKED. "
+        "Revocation is account-wide (coarse), so signing out on one device signs "
+        "the account out on all of them."
+    ),
+)
+async def logout(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    token_version = await auth_service.revoke_all_sessions(
+        db,
+        current_user.user_id,
+        reason="USER_LOGOUT",
+        actor_id=current_user.user_id,
+    )
+    return APIResponse(
+        success=True,
+        message="Signed out. All sessions for this account have been revoked.",
+        data={
+            "user_id": current_user.user_id,
+            "sessions_revoked": True,
+            "token_version": token_version,
+        },
+    )
+
+
+@router.post(
     "/set-pin",
     response_model=APIResponse[dict],
     summary="Set or Update Transaction PIN",

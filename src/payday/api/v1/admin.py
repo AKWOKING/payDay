@@ -19,6 +19,7 @@ from payday.schemas.admin import (
     AuditLogListResponse,
     AuditLogItemResponse,
 )
+from payday.services.auth_service import auth_service
 from payday.services.wallet_engine import wallet_engine
 from payday.services.audit_service import audit_service
 from payday.services.reconciliation_service import reconciliation_service
@@ -115,6 +116,23 @@ async def update_user_status(
     old_status = user.status.value
     user.status = status_val
 
+    # WS-2 / LB-7: suspending or closing an account must evict its sessions,
+    # not merely stop new logins. Without this, re-activating the account would
+    # silently restore every token the blocked user still held.
+    #
+    # commit=False folds the revocation into this request's transaction, so the
+    # status change and the eviction commit together or not at all.
+    sessions_revoked = status_val != UserStatus.ACTIVE
+    token_version = None
+    if sessions_revoked:
+        token_version = await auth_service.revoke_all_sessions(
+            db,
+            user_id,
+            reason=f"ADMIN_STATUS_{status_val.value}",
+            actor_id=current_admin.user_id,
+            commit=False,
+        )
+
     await audit_service.log_action(
         db=db,
         action=f"USER_STATUS_{status_val.value}",
@@ -128,7 +146,12 @@ async def update_user_status(
     return APIResponse(
         success=True,
         message=f"User status updated from {old_status} to {status_val.value}",
-        data={"user_id": user_id, "new_status": status_val.value},
+        data={
+            "user_id": user_id,
+            "new_status": status_val.value,
+            "sessions_revoked": sessions_revoked,
+            "token_version": token_version,
+        },
     )
 
 
