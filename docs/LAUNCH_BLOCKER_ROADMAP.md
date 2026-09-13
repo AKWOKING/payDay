@@ -10,21 +10,25 @@ D21 (Redis) and D18 (pilot volume).
 
 ---
 
-## 0. Implementation status (2026-09-07)
+## 0. Implementation status (2026-09-13)
 
-Updated after the WS-0 / WS-3 / WS-5 build. See
-`docs/reports/SPRINT_5_REDIS_AND_THROTTLING.md` for the work record.
+Updated after the WS-0 / WS-3 / WS-5 build and the WS-2 build. See
+`docs/reports/SPRINT_5_REDIS_AND_THROTTLING.md` and
+`docs/reports/SPRINT_6_TOKEN_REVOCATION.md` for the work records.
 
 | Workstream | Status | Remaining before "done" |
 | --- | --- | --- |
 | WS-0 | 🟢 Core done | CI `redis:7` service job written in `ci.yml` but **unverified** — workflows cannot be pushed/run until the GitHub `workflows` permission is restored (R8) |
 | WS-3 (LB-6) | 🟢 Implemented | Deliberately **not** done: deliverable 3 (notify the account owner on threshold breach) — needs WS-1/notification delivery (D1) |
 | WS-5 (LB-4) | 🟢 Implemented | Confirm D-extra (24h TTL default is in place); production Redis (D21) |
-| WS-1/2/4/6/7 | 🔴 Not started | Gated on D1/D6-D12/D21/D18 per §5 |
+| WS-2 (LB-7) | 🟢 Implemented | Deliverable 6 (per-`jti` denylist for single-device logout) deliberately **not** built — logout is account-wide; no PIN-reset call site exists yet (see the sprint report) |
+| WS-1/4/6/7 | 🔴 Not started | WS-4 additionally depends on WS-2, which is now done. WS-1/6/7 gated on D1/D6-D12/D18 per §5 |
 
-Test baseline: **121 passed, 2 skipped** (up from 100 passed, 1 skipped —
-21 new tests in `tests/test_sprint5_*`; one extra skip is the real-Redis
-integration test that runs when `PAYDAY_TEST_REDIS_URL` is set, as CI does).
+Test baseline: **133 passed, 2 skipped** (from 100/1 before this work; 21 new
+tests in `tests/test_sprint5_*`, 12 in `tests/test_sprint6_session_revocation.py`).
+One skip is the real-Redis integration test that runs when
+`PAYDAY_TEST_REDIS_URL` is set, as CI does; the other is the `alg=none` test the
+local JOSE library refuses to mint.
 
 ---
 
@@ -68,7 +72,7 @@ authentication layer, both found by reading the code rather than the docs.
 | LB-4 | PIN counter is per-process — 5N attempts on N replicas | 🟠 | `transaction_manager.py:49` `_failed_pin_attempts: Dict[str, int] = {}` |
 | LB-5 | No load test against PostgreSQL | 🟠🔒 | Sprint 4 numbers are in-process ASGI over SQLite |
 | **LB-6** | **Login is completely unthrottled** | 🔴 | `auth_service.py:92-96` — no counter, no lockout, no rate limit |
-| **LB-7** | **Refresh tokens cannot be revoked** | 🔴 | `auth_service.py:116-140` — validity is "user exists and is ACTIVE" |
+| **LB-7** | **Refresh tokens cannot be revoked** | ✅ | Fixed 2026-09-13 — `users.token_version` + `tv` claim; validity is no longer status-only |
 
 ### LB-6 — newly found
 
@@ -88,6 +92,13 @@ This is worse than LB-4. LB-4 raises an attacker's PIN budget from 5 to 5N;
 LB-6 makes the password budget unbounded today, on one replica.
 
 ### LB-7 — newly found
+
+> **Fixed 2026-09-13 (WS-2).** Tokens now carry a `tv` claim compared against
+> `users.token_version`, which `revoke_all_sessions()` increments; logout,
+> suspension/closure and (when it ships) password reset therefore evict. The
+> text below is the original finding, kept as the record of what was wrong and
+> why the ordering mattered. Per-device revocation remains unimplemented.
+> See `docs/reports/SPRINT_6_TOKEN_REVOCATION.md`.
 
 `refresh_tokens` decodes the JWT, looks the user up, and issues a new pair if
 the user is `ACTIVE`. There is no denylist, no `jti` tracking, no token
@@ -200,6 +211,8 @@ independent. Three shared pieces of infrastructure sit underneath them:
 ```
 
 **The critical path is `WS-0 → LB-3 → LB-7 → LB-1 → LB-5`.**
+(WS-0 and LB-7 are done as of 2026-09-13; the remaining chain is LB-3 → LB-1 →
+LB-5.)
 
 Two non-obvious dependencies drive that:
 
@@ -208,7 +221,8 @@ Two non-obvious dependencies drive that:
    rows and marks them `SENT` with no outbound call), so LB-1 built today would
    have no way to reach anyone. LB-3 is a prerequisite of LB-1, not a parallel
    track.
-2. **Password reset is not secure before LB-7.** Covered above.
+2. **Password reset is not secure before LB-7.** Covered above — LB-7 is now
+   done, so this dependency is discharged for whoever picks up WS-4.
 
 **LB-2 (KYC) is fully independent** and is the natural parallel track if a
 second engineer is available.
@@ -314,6 +328,15 @@ staging, and its `Notification` row reflects the provider's actual response.
 ### WS-2 — LB-7: revocable sessions
 
 **Blocks:** LB-1 · **Est:** 2–3 days
+**Status 2026-09-13:** implemented. Deliverables 1–5 are in; deliverable 6
+(per-`jti` denylist) was deliberately not built — logout is account-wide, and
+that limitation is documented rather than glossed. The migration is revision
+**003**, not the 004 planned below: the plan assumed WS-1 (notification
+delivery) would land first, but WS-2 was executed first and the chain head was
+still `002_fix_schema_drift`. The "PIN reset" call site is not wired yet —
+`POST /auth/set-pin` is a first-time *set* for new accounts, so revoking there
+would sign a user out mid-onboarding; the PIN-reset call site belongs to the
+LB-1 flow (D15). See `docs/reports/SPRINT_6_TOKEN_REVOCATION.md`.
 
 **Deliverables**
 
@@ -556,7 +579,7 @@ available.
 | P1 | WS-3 LB-6 login throttling | 2 | P0 |
 | P1 | WS-5 LB-4 PIN counter | 1–2 | P0 |
 | P2 | WS-1 LB-3 SMS delivery | 4–6 | **D1 contract signed** ⏳ |
-| P3 | WS-2 LB-7 token revocation | 2–3 | — (can overlap P2) |
+| P3 | WS-2 LB-7 token revocation | 2–3 | — (can overlap P2) · **done 2026-09-13** |
 | P4 | WS-4 LB-1 password reset | 4–5 | P2 + P3 |
 | ‖ | WS-6 LB-2 KYC upload | 5–7 | D6–D12 ⏳ |
 | P5 | WS-7 LB-5 load test | 3–5 | all + staging deployed |
@@ -601,7 +624,9 @@ rest sits on.
 - [ ] LB-4 PIN lockout enforced across replicas, proven by test
 - [ ] LB-5 capacity measured on PostgreSQL against an agreed SLO
 - [ ] LB-6 login throttled per account and per IP; owner notified
-- [ ] LB-7 sessions revocable; logout is real
+- [x] LB-7 sessions revocable; logout is real — `token_version` + `POST /auth/logout`,
+      12 tests incl. re-activation and cross-account isolation (2026-09-13).
+      Per-device revocation is **not** implemented: logout ends every session.
 - [ ] CI/CD pipelines have **actually run green** at least once
 - [ ] Production secrets rotated off the `.env.example` lineage
 - [ ] On-call owner named and alerting wired (D22)

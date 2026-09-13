@@ -320,12 +320,14 @@ auth-chain blockers:
 - [x] Ledger engine, double-entry, row locking
 - [x] MTN MoMo + Orange Money adapters, HMAC webhooks, anti-replay
 - [x] RBAC back-office, reconciliation engine
-- [x] 101 automated tests, all passing (baseline; suite now 121 passed / 2 skipped with WS-0/3/5)
+- [x] 101 automated tests, all passing (baseline; suite now 133 passed / 2 skipped with WS-0/3/5 and WS-2)
 - [x] Migration/model parity gate
 - [x] Containerization and four CI/CD pipelines
 - [x] OpenAPI 3.1 contract + committed baseline
 - [x] Frontend integration guide — all 19 screens mapped (§9.7)
 - [x] Shared Redis counter store: login throttling + cross-replica PIN lockout (§9.2)
+- [x] Revocable sessions: `token_version` + real server-side logout — logout is
+      account-wide, not per-device (WS-2, §9.2)
 - [ ] Production load test (§9.1)
 - [ ] Redis approved + provisioned in production (D21) and `COUNTER_BACKEND=redis` deployed (§9.2)
 - [ ] Deployment environment secrets (§9.5)

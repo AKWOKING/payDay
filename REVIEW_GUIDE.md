@@ -49,7 +49,8 @@ answer today is **still AMBER — better than last week, not green yet.**
    **D21** (is Redis approved as production infrastructure?) and **D18**
    (expected pilot volume — without it a load test proves nothing). §5 is the
    sequencing, §6 the risks, §7 the definition of "launch-ready". §0 is new:
-   it records that WS-0/WS-3/WS-5 were implemented on 2026-09-07.
+   it records that WS-0/WS-3/WS-5 were implemented on 2026-09-07 and WS-2 on
+   2026-09-13.
 2. **`docs/reports/SPRINT_4_REPORT.md`** — the AMBER verdict and the measured
    load figures. **Read the caveat on them**: they are in-process ASGI over
    SQLite (balance p95 ≈ 3.6 ms) and explicitly **not** a production capacity
@@ -57,7 +58,10 @@ answer today is **still AMBER — better than last week, not green yet.**
 3. **`docs/reports/SPRINT_5_REDIS_AND_THROTTLING.md`** — what changed this week:
    login throttling, a cross-replica PIN lockout, and the fail-closed rule.
    §5 lists what is still deliberately not done.
-4. **`docs/FINAL_PROJECT_HANDOVER.md`** — architecture, invariants, runbook,
+4. **`docs/reports/SPRINT_6_TOKEN_REVOCATION.md`** — WS-2: sessions are now
+   revocable. §5 lists what is *not* done (per-device logout, the PIN-reset call
+   site) so the limitation is not mistaken for a capability.
+5. **`docs/FINAL_PROJECT_HANDOVER.md`** — architecture, invariants, runbook,
    and §9 (known gaps). Section 9.2 was updated to say Redis is wired for the
    shared counters and Celery is still not.
 
@@ -71,7 +75,7 @@ longest procurement lead time and gates the password-reset critical path.
 The contract you build against is the OpenAPI document and the screen map —
 not the code.
 
-1. **`docs/FRONTEND_INTEGRATION_GUIDE.md`** — v2.0 maps all **19 Figma frames**
+1. **`docs/FRONTEND_INTEGRATION_GUIDE.md`** — v2.1 maps all **19 Figma frames**
    to live API calls and registers the design gaps in §4 (P2P send, bill
    payments, notification categories, referral codes, PIN login, recipient
    names, avatars/QR/tiers). If your screen is in §4, that feature does **not**
@@ -140,7 +144,7 @@ not the code.
 
 ## 4. What has been verified — and what has not
 
-| Verified (this session, 2026-09-07) | How |
+| Verified (2026-09-07 for WS-0/3/5, 2026-09-13 for WS-2) | How |
 | --- | --- |
 | 121 passed / 2 skipped (up from 100/1) | `pytest -q -p no:logging` |
 | No regression in the 101-test baseline | same run, no weakened assertions |
@@ -151,6 +155,11 @@ not the code.
 | Production refuses to start with memory backend / unreachable Redis | launch checks + live uvicorn exit |
 | OpenAPI additions only (429/503 declared; 32 paths) | baseline regen + contract test |
 | Sprint 4 work is on `main` (PR #4 merged at `9ac72cf`) | `git log origin/main`, `gh pr view 4` |
+| 133 passed / 2 skipped after WS-2 (12 new tests) | `pytest -q -p no:logging` |
+| Revoked sessions actually die — access token, refresh token, after re-activation, without collateral logout | `tests/test_sprint6_session_revocation.py` |
+| The new tests fail when the fix is removed (3 negative controls) | forced failures: 6 / 3 / 1 tests fail respectively |
+| Migration 003 backfills `token_version` to 0 on a migrated database | `alembic upgrade head` on a throwaway SQLite file, in-test |
+| OpenAPI additions only after WS-2 (`/auth/logout`; 33 paths) | baseline regen + contract test |
 
 | NOT verified (do not claim otherwise) | Why |
 | --- | --- |
