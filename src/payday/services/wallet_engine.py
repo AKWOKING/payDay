@@ -3,6 +3,7 @@ from typing import Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from payday.core.config import settings
+from payday.core.money import whole_xaf
 from payday.models.wallet import Wallet, WalletStatus
 from payday.models.transaction import TransactionType
 from payday.core.exceptions import (
@@ -23,14 +24,22 @@ class WalletEngine:
 
     @staticmethod
     def calculate_fee(tx_type: TransactionType, amount: Decimal) -> Decimal:
-        """Computes PayDay platform fee based on transaction type and amount."""
+        """Computes the PayDay platform fee for a transaction.
+
+        The result is a **whole number of francs**: XAF has no minor unit, so a
+        percentage fee such as 1% of 12 345 XAF (123.45) is not a representable
+        amount — it cannot be charged, refunded or reconciled to an operator
+        statement. `core.money.whole_xaf` applies the configured rounding policy
+        (D26) and the minimum fee is applied afterwards so the floor stays whole
+        too.
+        """
         if tx_type == TransactionType.DEPOSIT:
             fee_pct = Decimal(str(settings.DEFAULT_DEPOSIT_FEE_PERCENTAGE))
         else:
             fee_pct = Decimal(str(settings.DEFAULT_WITHDRAW_FEE_PERCENTAGE))
-        
-        calculated_fee = (amount * fee_pct).quantize(Decimal("0.01"))
-        min_fee = Decimal(str(settings.MIN_FEE_AMOUNT))
+
+        calculated_fee = whole_xaf(amount * fee_pct)
+        min_fee = whole_xaf(Decimal(str(settings.MIN_FEE_AMOUNT)))
         return max(calculated_fee, min_fee)
 
     @staticmethod

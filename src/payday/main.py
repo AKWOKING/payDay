@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 
-from payday.core.config import settings
+from payday.core.config import settings, validate_telco_configuration
 from payday.core.database import Base, engine
 from payday.core.counters import ensure_counters_ready
 from payday.core.exceptions import PayDayException
@@ -20,6 +20,14 @@ async def lifespan(app: FastAPI):
     # In production this refuses to start when Redis is required but
     # unreachable (fail-closed) — see docs/LAUNCH_BLOCKER_ROADMAP.md WS-0.
     await ensure_counters_ready()
+    # Validate the payment-channel configuration BEFORE serving traffic. In
+    # production this refuses to start unless live operator credentials are
+    # present, so a deployment can never silently run the mock adapter and
+    # accept deposits that never settle (M1 / LB-8).
+    telco_warnings = validate_telco_configuration()
+    for warning in telco_warnings:
+        logger.warning(f"[TELCO] {warning}")
+    logger.info(f"Payment channels running in TELCO_MODE={settings.TELCO_MODE}")
     # Create tables if not existing (useful for local dev / testing)
     logger.info(f"Starting {settings.PROJECT_NAME} v{settings.VERSION} [{settings.ENVIRONMENT}]")
     async with engine.begin() as conn:
@@ -133,6 +141,16 @@ from fastapi.responses import JSONResponse, HTMLResponse
 # Root endpoint with interactive preview HTML
 @app.get("/", response_class=HTMLResponse, tags=["General"])
 async def root():
+    # The page previously advertised both channels as "Adapter Active" even when
+    # the in-process simulator was serving every request. State the real mode.
+    channel_labels = {
+        "live": ("bg-success", "LIVE"),
+        "sandbox": ("bg-info text-dark", "Operator Sandbox"),
+        "mock": ("bg-secondary", "Simulated — no real money"),
+    }
+    channel_badge_class, channel_badge_text = channel_labels.get(
+        settings.TELCO_MODE, ("bg-secondary", settings.TELCO_MODE)
+    )
     return f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -221,7 +239,7 @@ async def root():
                             <div class="channel-card h-100">
                                 <div class="d-flex justify-content-between align-items-center mb-2">
                                     <h5 class="mb-0 text-warning"><i class="fa-solid fa-mobile-screen-button me-2"></i>MTN MoMo</h5>
-                                    <span class="badge bg-success">Adapter Active</span>
+                                    <span class="badge {channel_badge_class}">{channel_badge_text}</span>
                                 </div>
                                 <small class="text-secondary">RequestToPay collection &amp; Transfer disbursement, HMAC-verified webhooks with anti-replay.</small>
                             </div>
@@ -230,7 +248,7 @@ async def root():
                             <div class="channel-card h-100">
                                 <div class="d-flex justify-content-between align-items-center mb-2">
                                     <h5 class="mb-0 text-warning" style="color: #f97316 !important;"><i class="fa-solid fa-wallet me-2"></i>Orange Money</h5>
-                                    <span class="badge bg-success">Adapter Active</span>
+                                    <span class="badge {channel_badge_class}">{channel_badge_text}</span>
                                 </div>
                                 <small class="text-secondary">Web Payment initiation &amp; payout webhook listeners, multi-channel bridge live.</small>
                             </div>
