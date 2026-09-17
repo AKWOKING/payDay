@@ -29,11 +29,10 @@ sequenced execution plan for everything remaining — see
 `docs/MVP_EXECUTION_ROADMAP.md`. That document is now the canonical order of
 work; this one remains the defect register and decision list.
 
-Test baseline: **133 passed, 2 skipped** (from 100/1 before this work; 21 new
-tests in `tests/test_sprint5_*`, 12 in `tests/test_sprint6_session_revocation.py`).
-One skip is the real-Redis integration test that runs when
-`PAYDAY_TEST_REDIS_URL` is set, as CI does; the other is the `alg=none` test the
-local JOSE library refuses to mint.
+Test baseline: **205 passed, 2 skipped** (2026-09-17, after M1 A1–A8; was 133/2
+before that work, and 100/1 before WS-0/3/5 + WS-2). One skip is the real-Redis
+integration test that runs when `PAYDAY_TEST_REDIS_URL` is set, as CI does; the
+other is the `alg=none` test the local JOSE library refuses to mint.
 
 ---
 
@@ -141,6 +140,41 @@ periodic sweep (`services/status_sweep.py`) for notifications that never arrive.
 making the ledger follow the callback body again fails the forgery test
 (200 where 503 is required). Not closed until A5 confirms the operators send
 these shapes.
+
+---
+
+### LB-14 — found 2026-09-17 (frontend review)
+
+> **Open.** Full evidence and per-claim mapping:
+> `docs/reports/FRONTEND_REVIEW_2026-09-17.md`.
+
+The frontend engineer's deployed site (`pay-day-iota.vercel.app`) publishes a
+product, a history and a regulatory status that the platform does not have. This
+is a defect against the project's own rule — *document only what genuinely exists
+and verifiably passes* — and it is the most externally visible thing about PayDay
+right now.
+
+| Published claim | Reality |
+| --- | --- |
+| "Licensed and supervised under CEMAC regulations"; "2023 First licence — approved as a payment service provider" | **No licence.** A CEMAC *établissement de paiement* needs MINFI agrément after a COBAC avis, with 500M XAF paid-up capital. None of that has happened. |
+| "10k+ Trusted by thousands"; "10,000 people … across 1,200 agent locations"; a 2022–2024 company timeline | Fabricated. No production users, no agent model in the codebase, no such history. |
+| "Funds held with partner banks, never lent out"; "audited annually" | No trust/cantonment account, no audit, and no code holding customer funds separately. |
+| "Dial **#237#** from any line linked to your account to freeze the wallet" | **No USSD gateway exists.** A fraud victim following this gets no freeze. The real controls are an admin freeze endpoint and PIN lockout. |
+| Fee table omits deposits; site promises "no hidden charges" | The backend **charges 0.5% (min 25 XAF) on deposits** (`config.py:80,82`) and credits `amount − fee`. Published table lists only the 1.0% withdrawal fee. |
+| "send up to FCFA 1,000,000 per day and hold up to 5,000,000" | Enforced default is **500,000/day** (`config.py:44`); **no maximum-balance rule exists** at all. |
+| P2P transfers, bills (ENEO/Camwater/Canal+/airtime), agent cash-out, merchant accounts with API keys, bank linking, mobile app, EN/FR support, device binding | None implemented. Some are already 🛑 in `docs/FRONTEND_INTEGRATION_GUIDE.md`. |
+
+**Why it is a launch blocker rather than a marketing note:** rows 1–4 are
+regulatory and consumer-protection exposure in a supervised sector, and the
+`#237#` instruction can directly harm a user. The fee and limit rows are the
+published-vs-enforced class of defect this register already tracks for other
+surfaces (LB-9 was the same class, one layer down).
+
+**Cheapest correct action:** take down or re-label the licence, traction,
+cantonment and USSD claims today; reconcile the fee/limit table with
+configuration; move the genuinely-planned features behind a "coming soon"
+label. A decision is needed on whether the deposit fee stays (then it must be
+published) or goes.
 
 ---
 
