@@ -29,7 +29,7 @@ sequenced execution plan for everything remaining — see
 `docs/MVP_EXECUTION_ROADMAP.md`. That document is now the canonical order of
 work; this one remains the defect register and decision list.
 
-Test baseline: **205 passed, 2 skipped** (2026-09-17, after M1 A1–A8; was 133/2
+Test baseline: **229 passed, 2 skipped** (2026-09-17, after M1 A1–A8; was 133/2
 before that work, and 100/1 before WS-0/3/5 + WS-2). One skip is the real-Redis
 integration test that runs when `PAYDAY_TEST_REDIS_URL` is set, as CI does; the
 other is the `alg=none` test the local JOSE library refuses to mint.
@@ -175,6 +175,27 @@ cantonment and USSD claims today; reconcile the fee/limit table with
 configuration; move the genuinely-planned features behind a "coming soon"
 label. A decision is needed on whether the deposit fee stays (then it must be
 published) or goes.
+
+---
+
+### LB-15 … LB-17 — found 2026-09-17 (P2P build)
+
+Found while implementing internal transfers; all three are "declared but never
+wired", which is the failure mode this register exists to catch.
+
+| ID | Finding | Severity |
+| --- | --- | --- |
+| **LB-15** | **`wallet.monthly_limit` was never enforced.** The column existed, admins could set it, the API returned it, and `MonthlyLimitExceededError` was defined — but nothing ever raised it. Daily limits were checked for withdrawals only, so any other debit path had no ceiling at all. | 🔴 |
+| **LB-16** | **KYC was never required to move money.** `KycRequiredError` and `get_current_verified_user` existed and were used by nothing: an unverified user could deposit, withdraw and (once it existed) send. | 🔴 |
+| **LB-17** | **No ceiling on any credit.** No credit path checked a maximum balance, although the published site promises 5,000,000 XAF for a verified wallet. | 🟠 |
+
+**Fixed (2026-09-17, `POST /wallet/transfer` increment):** limits are enforced on
+every DEBIT path (daily and monthly), every credit passes a ceiling check before
+the counterparty is debited, and outgoing money requires a verified identity
+while receiving and self-funding do not. Tests:
+`tests/test_sprint7_p2p_transfer.py` (24). The published figures and the enforced
+ones now agree by default, which was one half of LB-14's fee/limit mismatch — the
+deposit-fee half still needs a product decision (D-27).
 
 ---
 

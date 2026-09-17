@@ -126,6 +126,11 @@ one. This is the difference between a flaky network and a double withdrawal.
 | `KYC_REQUIRED` | 403 | KYC not verified | Route to **Verify Account 1** |
 | `DUPLICATE_TRANSACTION` | 409 | Idempotency key reused | Treat as success; fetch the original |
 | `INVALID_STATE_TRANSITION` | 409 | Illegal status change | Refresh the transaction |
+| `RECIPIENT_NOT_ON_PAYDAY` | 400 | Transfer recipient has no PayDay wallet | Show `extra.suggested_channel` as a default and ask for MTN/ORANGE, then retry with `channel` |
+| `RECIPIENT_NOT_ACTIVE` | 400 | Recipient's account is not active | Explain that the recipient cannot receive right now |
+| `SELF_TRANSFER` | 400 | Sender and recipient are the same wallet | Block it in the UI before sending |
+| `BALANCE_CEILING_EXCEEDED` | 400 | Credit would exceed the wallet ceiling | Show `extra.ceiling` and the shortfall; the sender is not charged |
+| `MONTHLY_LIMIT_EXCEEDED` | 400 | Month's outgoing ceiling reached | Show `extra.monthly_limit` and `extra.current_total`; it counts withdrawals **and** transfers |
 | `CHANNEL_NOT_AVAILABLE` | 400 | UBA — Phase 2 | Disable in the channel picker |
 | `INVALID_CHANNEL` | 400 | Unknown channel | |
 | `INTERNAL_SERVER_ERROR` | 500 | Unhandled | Generic retry message |
@@ -156,7 +161,7 @@ Nineteen frames, in build order.
 | 16 | User Profile | `GET /auth/me`, `GET /kyc/status` | ⚠️ §4.10 |
 | 17 | Verify Account 1 | `POST /kyc/submit` | 🛑 **§4.5** |
 | 18 | Verify Account 2 | `POST /kyc/submit` | 🛑 **§4.5** |
-| 19 | *(Dashboard “Send” action)* | — | 🛑 **§4.2** |
+| 19 | *(Dashboard “Send” action)* | `POST /wallet/transfer` | ✅ **§11** |
 
 ✅ buildable as drawn · ⚠️ buildable with a documented adjustment · 🛑 blocked on backend work
 
@@ -735,8 +740,69 @@ verified with anti-replay protection.
 
 **Blocked pending backend decisions**
 - [ ] §4.1 PIN login + password reset
-- [ ] §4.2 P2P “Send”, bill payments, bank channel
+- [x] §4.2 P2P “Send” — shipped (`POST /wallet/transfer`, §11). Bill payments and the bank channel are still open.
 - [ ] §4.3 Notification categories and read state
 - [ ] §4.4 Referral code field
 - [ ] §4.5 KYC document/selfie upload
 - [ ] §4.7 Recipient name resolution
+
+---
+
+## 11. Transfers — sending money to a phone number
+
+`POST /api/v1/wallet/transfer` is the endpoint behind the dashboard's **Send**
+action. It is one customer intent with two possible outcomes, and the server
+decides which applies — do not try to predict it in the client.
+
+### Request
+
+```json
+{
+  "recipient_phone": "+237677998877",
+  "amount": 5000,
+  "pin": "1234",
+  "channel": "ORANGE",            // only needed for a non-PayDay recipient
+  "note": "Rent",                 // optional, max 140 chars, shown to both parties
+  "idempotency_key": "a-client-generated-uuid"
+}
+```
+
+`amount` is whole francs (`multiple_of` 1). `pin` is the transaction PIN
+(`POST /auth/set-pin`), not the account password.
+
+### What comes back — and what it means
+
+| Outcome | `type` | `channel` | `internal` | `status` | Fee |
+| --- | --- | --- | --- | --- | --- |
+| Recipient has a PayDay wallet | `TRANSFER` | `PAYDAY` | `true` | `SUCCESS` immediately | free |
+| Recipient has no wallet, `channel` supplied | `WITHDRAW` | `MTN`/`ORANGE` | `false` | `PROCESSING` | 1% (min 25 XAF) |
+
+Both are returned with HTTP **202** and the standard envelope. Render "sent
+instantly" when `internal` is true and "on its way via MTN" when it is not; in the
+second case the final state arrives through the usual transaction status flow
+(poll `GET /wallet/transactions/{id}` or use push).
+
+`direction` (`CREDIT`/`DEBIT`), `counterparty_msisdn_masked` (`+23767•••877`) and
+`transfer_group_id` are now on every transaction response, so history rows can
+show a signed amount and a counterparty without extra calls.
+
+### Rules the client should mirror
+
+* A recipient with a PayDay wallet is always credited internally, even if you send
+  `channel` — it is instant and free. Sending `channel` is harmless.
+* A recipient without one, and no `channel`, returns **`RECIPIENT_NOT_ON_PAYDAY`**
+  with `extra.suggested_channel`. That suggestion comes from the number's prefix
+  and is a *hint*: Cameroon has number portability, so ask the user to confirm the
+  network rather than sending to the suggestion automatically.
+* Sending money requires **verified KYC** (`KYC_REQUIRED`, 403) and a **set PIN**
+  (`PIN_NOT_SET`). Receiving does not — a pending user can still be paid.
+* Outgoing money counts against both the daily and the monthly limit, and the
+  credit side is checked against the wallet ceiling. A refusal moves nothing:
+  there is no state where the sender was debited and the recipient was not paid.
+* Always send `idempotency_key`. A retry with the same key returns the original
+  transfer instead of sending twice.
+
+### Money format reminder
+
+Amounts are whole francs as JSON numbers. Never format them with decimals for the
+wire, and never send a fractional amount — it is rejected with `VALIDATION_ERROR`.

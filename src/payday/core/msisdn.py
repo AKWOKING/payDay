@@ -129,3 +129,19 @@ def format_for_operator(phone: str, operator: str) -> str:
     if operator.upper() == "ORANGE":
         return national
     return f"{CAMEROON_COUNTRY_CODE}{national}"
+
+
+def mask_msisdn(phone_number: str) -> str:
+    """Reduce a number to something safe to display: `+237677112233` → `+2376•••233`.
+
+    Used on transaction rows so a statement can name the counterparty without
+    every list response carrying full phone numbers. Enough digits are kept for a
+    human to recognise their own contact, not enough to reconstruct the number
+    from a screenshot.
+    """
+    digits = re.sub(r"\D", "", phone_number or "")
+    if not digits:
+        return ""
+    if len(digits) <= 6:
+        return "•" * len(digits)
+    return f"+{digits[:5]}•••{digits[-3:]}"

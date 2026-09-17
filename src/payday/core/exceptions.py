@@ -178,6 +178,65 @@ class KycRequiredError(PayDayException):
         )
 
 
+class BalanceCeilingExceededError(PayDayException):
+    """A credit would push a wallet past its maximum stored value.
+
+    E-money wallets have a ceiling. The published figure and the enforced one
+    must be the same number, so the error names the ceiling rather than saying
+    "limit exceeded" and leaving support to guess which limit.
+    """
+
+    def __init__(self, ceiling: float, current_balance: float, attempted_credit: float):
+        super().__init__(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"This wallet cannot hold more than {ceiling:,.0f} XAF. "
+                f"Balance {current_balance:,.0f} XAF + {attempted_credit:,.0f} XAF "
+                f"would exceed it."
+            ),
+            code="BALANCE_CEILING_EXCEEDED",
+            title="Wallet Balance Ceiling Reached",
+            extra={
+                "ceiling": ceiling,
+                "current_balance": current_balance,
+                "attempted_credit": attempted_credit,
+            },
+        )
+
+
+class RecipientNotFoundError(PayDayException):
+    """The transfer recipient is not a PayDay user (and no channel was given)."""
+
+    def __init__(self, recipient: str, suggested_channel: Optional[str] = None):
+        hint = (
+            f" Supply channel={suggested_channel} to send to their mobile money "
+            f"account instead."
+            if suggested_channel
+            else " Supply a channel to send to their mobile money account instead."
+        )
+        super().__init__(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"{recipient} does not have a PayDay wallet.{hint} The channel is a "
+                "hint: numbers can be ported between operators, so the sender must "
+                "choose it."
+            ),
+            code="RECIPIENT_NOT_ON_PAYDAY",
+            title="Recipient Not Found",
+            extra={"suggested_channel": suggested_channel},
+        )
+
+
+class SelfTransferError(PayDayException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot send money to your own wallet.",
+            code="SELF_TRANSFER",
+            title="Invalid Recipient",
+        )
+
+
 class DuplicateTransactionError(PayDayException):
     def __init__(self, idempotency_key: str):
         super().__init__(

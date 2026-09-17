@@ -835,6 +835,7 @@
             "anyOf": [
               {
                 "exclusiveMinimum": 0.0,
+                "multipleOf": 1.0,
                 "type": "number"
               },
               {
@@ -842,9 +843,9 @@
                 "type": "string"
               }
             ],
-            "description": "Amount in XAF to deposit",
+            "description": "Amount in XAF to deposit. Whole francs only: XAF has no minor unit.",
             "examples": [
-              5000.0
+              5000
             ],
             "title": "Amount"
           },
@@ -1949,9 +1950,19 @@
         "enum": [
           "MTN",
           "ORANGE",
-          "UBA"
+          "UBA",
+          "PAYDAY"
         ],
         "title": "TransactionChannel",
+        "type": "string"
+      },
+      "TransactionDirection": {
+        "description": "Which way the money went, from the perspective of the owning wallet.\n\nNeeded because `type` can no longer carry the sign: two legs of one internal\ntransfer are both `TRANSFER`, and `amount` is constrained to be positive. It\nis also what lets a history response show a signed amount without the client\ninferring it from the transaction type.",
+        "enum": [
+          "CREDIT",
+          "DEBIT"
+        ],
+        "title": "TransactionDirection",
         "type": "string"
       },
       "TransactionReceiptResponse": {
@@ -1976,6 +1987,17 @@
             ],
             "title": "Completed At"
           },
+          "counterparty_msisdn_masked": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterparty Msisdn Masked"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -1985,6 +2007,16 @@
             "default": "XAF",
             "title": "Currency",
             "type": "string"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TransactionDirection"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "external_ref": {
             "anyOf": [
@@ -2006,6 +2038,11 @@
             "title": "Idempotency Key",
             "type": "string"
           },
+          "internal": {
+            "default": false,
+            "title": "Internal",
+            "type": "boolean"
+          },
           "message": {
             "title": "Message",
             "type": "string"
@@ -2026,6 +2063,17 @@
           "transaction_id": {
             "title": "Transaction Id",
             "type": "string"
+          },
+          "transfer_group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transfer Group Id"
           },
           "type": {
             "$ref": "#/components/schemas/TransactionType"
@@ -2079,10 +2127,42 @@
             ],
             "title": "Completed At"
           },
+          "counterparty_msisdn_masked": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterparty Msisdn Masked"
+          },
+          "counterparty_wallet_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterparty Wallet Id"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
             "type": "string"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TransactionDirection"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "external_ref": {
             "anyOf": [
@@ -2115,6 +2195,11 @@
             "title": "Idempotency Key",
             "type": "string"
           },
+          "internal": {
+            "default": false,
+            "title": "Internal",
+            "type": "boolean"
+          },
           "net_amount": {
             "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Net Amount",
@@ -2126,6 +2211,17 @@
           "transaction_id": {
             "title": "Transaction Id",
             "type": "string"
+          },
+          "transfer_group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transfer Group Id"
           },
           "type": {
             "$ref": "#/components/schemas/TransactionType"
@@ -2164,10 +2260,95 @@
       "TransactionType": {
         "enum": [
           "DEPOSIT",
-          "WITHDRAW"
+          "WITHDRAW",
+          "TRANSFER"
         ],
         "title": "TransactionType",
         "type": "string"
+      },
+      "TransferInitiateRequest": {
+        "description": "Send money to a phone number.\n\nOne intent, two realities: a registered recipient is credited instantly from\nour own ledger; anyone else is paid out through their mobile money account,\nwhich is why `channel` becomes required only in that case. The routing\ndecision belongs to the server — see\n`TransactionManager.initiate_transfer`.",
+        "properties": {
+          "amount": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "multipleOf": 1.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "description": "Amount in XAF to send. Whole francs only: XAF has no minor unit.",
+            "examples": [
+              5000
+            ],
+            "title": "Amount"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TransactionChannel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "MTN or ORANGE to pay out to a non-PayDay number. Optional (and ignored) when the recipient holds a PayDay wallet."
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Unique client UUID to prevent duplicate sends",
+            "title": "Idempotency Key"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 140,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional note shown to both parties",
+            "title": "Note"
+          },
+          "pin": {
+            "description": "Transaction PIN",
+            "examples": [
+              "1234"
+            ],
+            "maxLength": 6,
+            "minLength": 4,
+            "title": "Pin",
+            "type": "string"
+          },
+          "recipient_phone": {
+            "description": "Recipient MSISDN",
+            "examples": [
+              "+237677998877"
+            ],
+            "title": "Recipient Phone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipient_phone",
+          "amount",
+          "pin"
+        ],
+        "title": "TransferInitiateRequest",
+        "type": "object"
       },
       "UpdateLimitsRequest": {
         "properties": {
@@ -2529,6 +2710,7 @@
             "anyOf": [
               {
                 "exclusiveMinimum": 0.0,
+                "multipleOf": 1.0,
                 "type": "number"
               },
               {
@@ -2536,9 +2718,9 @@
                 "type": "string"
               }
             ],
-            "description": "Amount in XAF to withdraw",
+            "description": "Amount in XAF to withdraw. Whole francs only: XAF has no minor unit.",
             "examples": [
-              10000.0
+              10000
             ],
             "title": "Amount"
           },
@@ -6650,6 +6832,133 @@
         ]
       }
     },
+    "/api/v1/wallet/transfer": {
+      "post": {
+        "description": "Sends money to a phone number. If the recipient holds a PayDay wallet the transfer is an internal ledger move: final, instant, and free. Otherwise supply `channel` (MTN or ORANGE) and the money is paid out through the operator, returning a PROCESSING transaction to be confirmed asynchronously. `direction`, `counterparty_msisdn_masked` and `internal` on the response say which happened.",
+        "operationId": "transfer_api_v1_wallet_transfer_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferInitiateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIResponse_TransactionResponse_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Request — RFC 7807 Problem Details"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unauthorized — missing or invalid credentials"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden — insufficient role or ownership"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict — e.g. idempotency or state transition"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Send Money to a Phone Number (PayDay or Mobile Money)",
+        "tags": [
+          "Transactions & Money Movement"
+        ]
+      }
+    },
     "/api/v1/wallet/withdraw": {
       "post": {
         "description": "Places a hold on wallet funds and dispatches payout/transfer to the destination mobile money account. Requires 4-6 digit transaction PIN.",
@@ -6779,18 +7088,8 @@
     },
     "/api/v1/webhooks/mtn": {
       "post": {
-        "description": "Endpoint consumed by MTN MoMo gateway to notify PayDay of collection or disbursement outcome.",
+        "description": "Consumed by the MTN MoMo gateway. The callback identifies the transaction; settlement is decided by MTN's own RequestToPay status endpoint, never by this body (MTN does not sign callbacks).",
         "operationId": "mtn_webhook_api_v1_webhooks_mtn_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WebhookCallbackPayload"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "content": {
@@ -6901,18 +7200,8 @@
     },
     "/api/v1/webhooks/orange": {
       "post": {
-        "description": "Endpoint consumed by Orange Money gateway to notify PayDay of web payment or payout outcome.",
+        "description": "Consumed by Orange Money. Orange sends only {status, notif_token, txnid}: the notif_token stored at initiation identifies the order, and Orange's transactionstatus endpoint decides the outcome.",
         "operationId": "orange_webhook_api_v1_webhooks_orange_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WebhookCallbackPayload"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "content": {

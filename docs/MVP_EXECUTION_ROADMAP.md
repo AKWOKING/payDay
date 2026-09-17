@@ -424,8 +424,17 @@ against the mock.
 > production ones need KYC/contract, and Orange needs an RCCM. Until A5 runs,
 > no endpoint, header or status path here is confirmed by an operator.
 >
-> **Migration numbering:** A8 took 004 (`004_provider_callback_refs`), so WS-1
-> and WS-6 take 005 and 006 when they land (R21).
+> **Migration numbering:** A8 took 004 (`004_provider_callback_refs`) and the
+> P2P increment took 005 (`005_transfers_and_direction`), so WS-1 and WS-6 take
+> 006 and 007 when they land (R21).
+>
+> **P2P shipped (2026-09-17):** `POST /wallet/transfer` — internal transfers are an
+> atomic two-leg ledger move (instant, free, conserved); non-PayDay recipients
+> delegate to the operator payout path. Alongside it, three declared-but-unwired
+> controls were made real: monthly limits, a wallet credit ceiling, and KYC
+> gating on outgoing money (LB-15/16/17). 24 new tests; suite 229 passed, 2
+> skipped. Frontend screen #19 is unblocked — see
+> `docs/FRONTEND_INTEGRATION_GUIDE.md` §11.
 
 **Exit criteria:** a deposit and a withdrawal complete end-to-end against *both*
 MTN and Orange **sandboxes**, with real callbacks, driven entirely by

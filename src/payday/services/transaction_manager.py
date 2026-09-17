@@ -16,6 +16,7 @@ from payday.models.wallet import Wallet, WalletStatus
 from payday.models.linked_account import LinkedExternalAccount, ChannelProvider
 from payday.models.transaction import (
     Transaction,
+    TransactionDirection,
     TransactionType,
     TransactionChannel,
     TransactionStatus,
@@ -40,10 +41,14 @@ from payday.core.exceptions import (
     UserNotFoundError,
     DuplicateTransactionError,
     InvalidStateTransitionError,
+    KycRequiredError,
+    RecipientNotFoundError,
     RedisUnavailableError,
+    SelfTransferError,
 )
 from payday.core.logging import logger
 from payday.core.money import to_wire_amount_string, whole_xaf
+from payday.core.msisdn import mask_msisdn, operator_for
 
 
 class SettlementOutcome(str, enum.Enum):
@@ -251,19 +256,27 @@ class TransactionManager:
         return transaction
 
     @staticmethod
-    async def initiate_withdrawal(
+    async def _authorize_pin(
         db: AsyncSession,
         user: User,
-        req: WithdrawInitiateRequest,
-    ) -> Transaction:
-        # Check user status & PIN
-        if user.status != UserStatus.ACTIVE:
-            raise PayDayException(status_code=403, detail="User account is not active", code="ACCOUNT_INACTIVE")
+        pin: str,
+    ) -> None:
+        """Authorise an outgoing transaction by PIN, or raise.
 
+        Extracted from `initiate_withdrawal` so the transfer path cannot drift
+        from it: this decides whether a customer's money may leave, and a second
+        copy would eventually disagree with the first.
+
+        Raises `PinNotSetError` when no PIN is set, `InvalidPinError` on a wrong
+        PIN (attempts counted in the shared store, so replicas share one budget),
+        `WalletFrozenError` on the fifth failure, and `RedisUnavailableError`
+        when the counter is unreachable -- failing closed, because an
+        unverifiable attempt count is not a safe state to transact in.
+        """
         if not user.pin_hash:
             raise PinNotSetError()
 
-        if not verify_pin(req.pin, user.pin_hash):
+        if not verify_pin(pin, user.pin_hash):
             # WS-5 / LB-4: the failure counter lives in the shared counter store
             # (Redis in production) so N replicas enforce ONE combined 5-attempt
             # budget instead of 5 attempts per replica.
@@ -314,6 +327,26 @@ class TransactionManager:
 
         # On valid PIN, clear failed attempts from the shared store
         await get_counter_store().delete(pin_failure_key(user.user_id))
+
+        return None
+
+    @staticmethod
+    async def initiate_withdrawal(
+        db: AsyncSession,
+        user: User,
+        req: WithdrawInitiateRequest,
+    ) -> Transaction:
+        # Check user status & PIN
+        if user.status != UserStatus.ACTIVE:
+            raise PayDayException(status_code=403, detail="User account is not active", code="ACCOUNT_INACTIVE")
+
+        # LB-16: the code declared KycRequiredError and get_current_verified_user
+        # but enforced KYC on nothing. Money leaving the platform now requires a
+        # verified identity.
+        if settings.REQUIRE_KYC_FOR_OUTGOING and user.kyc_status != KycStatus.VERIFIED:
+            raise KycRequiredError()
+
+        await TransactionManager._authorize_pin(db, user, req.pin)
 
         # Idempotency check
         idempotency_key = req.idempotency_key or str(uuid.uuid4())
@@ -408,6 +441,7 @@ class TransactionManager:
             external_ref=external_ref,
             failure_reason=failure_reason,
             completed_at=completed_at,
+            counterparty_msisdn_masked=mask_msisdn(req.destination_phone),
             provider_order_id=channel_res.provider_order_id,
             provider_notif_token=channel_res.provider_notif_token,
             provider_txn_id=channel_res.provider_txn_id,
@@ -448,6 +482,187 @@ class TransactionManager:
         await db.commit()
         await db.refresh(transaction)
         return transaction
+
+    @staticmethod
+    async def initiate_transfer(
+        db: AsyncSession,
+        user: User,
+        req: "TransferInitiateRequest",
+    ) -> Transaction:
+        """Send money to a phone number: internal if it is ours, else a payout.
+
+        One customer intent, two realities. A recipient who holds a PayDay wallet
+        is credited directly and instantly with no operator involved; anyone else
+        is paid out through the existing disbursement path, which already handles
+        holds, operator confirmation and failure correctly.
+
+        Routing is decided here rather than in the client: a client that has to
+        know which reality applies would duplicate this rule, and the two copies
+        would disagree. A registered recipient is always served internally even if
+        the caller named a channel — the money arrives instantly and free, which is
+        what the customer asked for — and the discrepancy is logged so a client
+        bug is visible rather than silent.
+
+        Atomicity: the debit, the credit, both transaction rows, both audit
+        entries and both notifications belong to one unit of work. The audit and
+        notification helpers deliberately do not commit, so a failure anywhere
+        leaves the ledger exactly as it was.
+        """
+        if user.status != UserStatus.ACTIVE:
+            raise PayDayException(
+                status_code=403, detail="User account is not active", code="ACCOUNT_INACTIVE"
+            )
+        if settings.REQUIRE_KYC_FOR_OUTGOING and user.kyc_status != KycStatus.VERIFIED:
+            raise KycRequiredError()
+
+        await TransactionManager._authorize_pin(db, user, req.pin)
+
+        # Idempotency: a retried send must not move money twice. The key is the
+        # sender's leg, so a replay returns the original transfer.
+        idempotency_key = req.idempotency_key or str(uuid.uuid4())
+        existing_tx = (
+            await db.execute(
+                select(Transaction).where(Transaction.idempotency_key == idempotency_key)
+            )
+        ).scalars().first()
+        if existing_tx:
+            return existing_tx
+
+        recipient = (
+            await db.execute(select(User).where(User.phone_number == req.recipient_phone))
+        ).scalars().first()
+
+        if recipient is None:
+            # Not one of ours. The caller must say which network to pay out on:
+            # Cameroon has number portability, so a prefix is a hint about the
+            # operator, never a routing decision for someone else's money.
+            if req.channel is None:
+                raise RecipientNotFoundError(
+                    req.recipient_phone, operator_for(req.recipient_phone)
+                )
+            return await TransactionManager.initiate_withdrawal(
+                db,
+                user,
+                WithdrawInitiateRequest(
+                    channel=req.channel,
+                    amount=req.amount,
+                    destination_phone=req.recipient_phone,
+                    pin=req.pin,
+                    idempotency_key=idempotency_key,
+                ),
+            )
+
+        if recipient.user_id == user.user_id:
+            raise SelfTransferError()
+
+        if recipient.status != UserStatus.ACTIVE:
+            raise PayDayException(
+                status_code=400,
+                detail=(
+                    "The recipient's account is not active, so it cannot receive "
+                    "money. Contact support if you believe this is wrong."
+                ),
+                code="RECIPIENT_NOT_ACTIVE",
+            )
+
+        if req.channel is not None and req.channel != TransactionChannel.PAYDAY:
+            logger.warning(
+                f"[TRANSFER] Caller requested channel={req.channel.value} for "
+                f"recipient {recipient.user_id}, who holds a PayDay wallet; "
+                "routing internally (instant, free) and ignoring the channel."
+            )
+
+        fee = wallet_engine.calculate_fee(TransactionType.TRANSFER, req.amount)
+
+        sender_wallet_row = await wallet_engine.get_wallet_by_user_id(db, user.user_id)
+        recipient_wallet_row = await wallet_engine.get_wallet_by_user_id(db, recipient.user_id)
+
+        # Deterministic lock order (ascending wallet id) so two transfers in
+        # opposite directions cannot deadlock.
+        wallets = await wallet_engine.lock_wallets_in_order(
+            db, [sender_wallet_row.wallet_id, recipient_wallet_row.wallet_id]
+        )
+        sender_wallet = wallets[sender_wallet_row.wallet_id]
+        recipient_wallet = wallets[recipient_wallet_row.wallet_id]
+
+        # Everything is validated before anything moves: a refused transfer must
+        # leave both wallets untouched, and a half-completed one is the worst
+        # outcome available.
+        await wallet_engine.validate_outgoing_capacity(db, sender_wallet, req.amount, fee)
+        wallet_engine.validate_credit_capacity(recipient_wallet, req.amount)
+
+        group_id = str(uuid.uuid4())
+        sender_tx_id = str(uuid.uuid4())
+        recipient_tx_id = str(uuid.uuid4())
+        completed_at = datetime.now(timezone.utc)
+
+        sender_tx = Transaction(
+            transaction_id=sender_tx_id,
+            idempotency_key=idempotency_key,
+            wallet_id=sender_wallet.wallet_id,
+            linked_account_id=None,
+            type=TransactionType.TRANSFER,
+            channel=TransactionChannel.PAYDAY,
+            direction=TransactionDirection.DEBIT,
+            amount=req.amount,
+            fee=fee,
+            net_amount=req.amount,
+            status=TransactionStatus.SUCCESS,
+            transfer_group_id=group_id,
+            counterparty_wallet_id=recipient_wallet.wallet_id,
+            counterparty_msisdn_masked=mask_msisdn(recipient.phone_number),
+            extra_data={"note": req.note} if req.note else None,
+            completed_at=completed_at,
+        )
+        # The receiving leg needs its own unique idempotency key; derived from
+        # the sender's transaction id so it is stable and traceable.
+        recipient_tx = Transaction(
+            transaction_id=recipient_tx_id,
+            idempotency_key=f"P2P-CREDIT-{sender_tx_id}",
+            wallet_id=recipient_wallet.wallet_id,
+            linked_account_id=None,
+            type=TransactionType.TRANSFER,
+            channel=TransactionChannel.PAYDAY,
+            direction=TransactionDirection.CREDIT,
+            amount=req.amount,
+            fee=Decimal("0.00"),
+            net_amount=req.amount,
+            status=TransactionStatus.SUCCESS,
+            transfer_group_id=group_id,
+            counterparty_wallet_id=sender_wallet.wallet_id,
+            counterparty_msisdn_masked=mask_msisdn(user.phone_number),
+            completed_at=completed_at,
+        )
+        db.add_all([sender_tx, recipient_tx])
+        await db.flush()
+
+        await wallet_engine.transfer_funds(
+            db=db,
+            sender_wallet=sender_wallet,
+            recipient_wallet=recipient_wallet,
+            amount=req.amount,
+            group_id=group_id,
+            sender_tx_id=sender_tx_id,
+            recipient_tx_id=recipient_tx_id,
+        )
+
+        from payday.services.notification_service import notification_service
+        await notification_service.dispatch_transaction_alert(
+            db=db,
+            user=user,
+            transaction=sender_tx,
+            current_balance=float(sender_wallet.balance),
+        )
+        await notification_service.dispatch_transaction_alert(
+            db=db,
+            user=recipient,
+            transaction=recipient_tx,
+            current_balance=float(recipient_wallet.balance),
+        )
+
+        await db.commit()
+        await db.refresh(sender_tx)
+        return sender_tx
 
     @staticmethod
     async def process_webhook(
@@ -682,7 +897,14 @@ class TransactionManager:
         if not tx:
             raise PayDayException(status_code=404, detail="Transaction not found", code="TRANSACTION_NOT_FOUND")
 
-        total_charged = tx.amount + (tx.fee if tx.type == TransactionType.WITHDRAW else Decimal("0.00"))
+        # A transfer debits the sender's amount (the fee is already broken out),
+        # and a withdrawal debits amount + fee; deposits credit amount - fee.
+        if tx.type == TransactionType.WITHDRAW:
+            total_charged = tx.amount + tx.fee
+        elif tx.type == TransactionType.TRANSFER:
+            total_charged = tx.amount + (tx.fee if tx.direction == TransactionDirection.DEBIT else Decimal("0.00"))
+        else:
+            total_charged = tx.amount
         net_credited = (tx.amount - tx.fee) if tx.type == TransactionType.DEPOSIT else tx.amount
 
         message = "Transaction completed successfully." if tx.status == TransactionStatus.SUCCESS else (
@@ -706,6 +928,10 @@ class TransactionManager:
             created_at=tx.created_at,
             completed_at=tx.completed_at,
             message=message,
+            direction=tx.direction,
+            counterparty_msisdn_masked=tx.counterparty_msisdn_masked,
+            transfer_group_id=tx.transfer_group_id,
+            internal=tx.internal,
         )
 
 

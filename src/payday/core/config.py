@@ -80,6 +80,17 @@ class Settings(BaseSettings):
     DEFAULT_DEPOSIT_FEE_PERCENTAGE: float = 0.005  # 0.5%
     DEFAULT_WITHDRAW_FEE_PERCENTAGE: float = 0.01   # 1.0%
     MIN_FEE_AMOUNT: float = 25.00                  # 25 XAF minimum
+    # PayDay -> PayDay transfers are free (published: "Sending to another PayDay
+    # wallet is free"). The minimum fee above deliberately does NOT apply to
+    # them -- a 25 XAF floor on a "free" transfer would be a lie.
+    DEFAULT_TRANSFER_FEE_PERCENTAGE: float = 0.0
+    # Ceiling on any credit into a wallet (deposit, transfer-in). Published by
+    # the frontend as 5,000,000 for a verified personal wallet; the value is a
+    # product/licence decision (D-28), not a technical constant. 0 disables.
+    MAX_WALLET_BALANCE: float = 5000000.00
+    # Outgoing money requires verified KYC (LB-16: the code declared
+    # KycRequiredError and get_current_verified_user but enforced neither).
+    REQUIRE_KYC_FOR_OUTGOING: bool = True
 
     # XAF rounding (M1 / LB-9).
     # XAF has no minor unit, so a computed fee such as 61.72 must become a whole
