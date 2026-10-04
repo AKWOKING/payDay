@@ -199,6 +199,46 @@ deposit-fee half still needs a product decision (D-27).
 
 ---
 
+### LB-18 — found 2026-10-04 (API access research)
+
+> **Open — company-level decision, not a defect code can fix.**
+> Full research: `docs/research/API_ACCESS_MTN_OM_CAMEROON.md`.
+
+**A wallet that holds customer balances is a licensed activity in CEMAC, and PayDay does
+not hold that licence.** Payment services may only be provided by credit institutions,
+microfinance institutions or licensed payment institutions (Règlement 04/18/CEMAC/UMAC/COBAC
+art. 5); a payment institution needs an agrément from MINFI on COBAC's conforming opinion
+plus a BEAC technical opinion, with **500,000,000 XAF** minimum paid-up capital, an SA with
+a board, and GIMAC interoperability.
+
+Two consequences that make this a launch blocker rather than a legal footnote:
+
+1. **Enforcement is live.** A MINFI communiqué of 5 May 2025 gave unlicensed operators of
+   payment services three months to regularise or be closed under Article 84, and instructed
+   licensed providers, businesses and public bodies to **cease all partnerships with
+   unlicensed payment providers**. Order 080/CAB of 28 May 2025 tightened the definitions.
+2. **It cannot be routed around.** Operator API contracts or an aggregator give us rails,
+   not the right to hold balances — and because licensed PSPs may not partner with
+   unlicensed payment providers, holding balances through an aggregator reproduces the same
+   problem. COBAC is separately examining customer funds that transit aggregator accounts
+   (25 September 2026).
+
+**Market-access precedents:** Wave operates without its own licence under Commercial Bank
+Cameroun's authorisation (COBAC D-2025/122, 11 June 2025) — about 12 months from request to
+decision; Konoom obtained its own agrément in July 2026, becoming the third licensed payment
+institution in Cameroon after OMCM and MMC.
+
+**Also material to the platform:** Orange's payout/disbursement product is a **separate
+contract** from Web Payment, so our Orange withdrawal path may not be grantable at all
+without it; MTN's go-live dossier asks for sandbox test results (making A5 an onboarding
+input); and MTN disbursements need funded float with a balance check we do not yet perform.
+
+**What closes it:** a board decision on the custody route (non-custodial, licensed partner
+of record, or own agrément), then the matching commercial process. Registered as D-31 in
+`docs/design/SYSTEM_ARCHITECTURE.md`.
+
+---
+
 ### LB-7 — newly found
 
 > **Fixed 2026-09-13 (WS-2).** Tokens now carry a `tv` claim compared against

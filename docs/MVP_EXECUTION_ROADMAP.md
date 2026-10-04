@@ -421,8 +421,11 @@ against the mock.
 > document — that requirement is why live mode is still gated, this time on
 > `TELCO_STATUS_SWEEP_ENABLED`). **A5 is the remaining task and it is blocked on
 > credentials**, not on code: MTN sandbox credentials are self-provisioned but
-> production ones need KYC/contract, and Orange needs an RCCM. Until A5 runs,
-> no endpoint, header or status path here is confirmed by an operator.
+> production ones need KYC/contract, and Orange needs an RCCM — and MTN's go-live
+> dossier asks for the applicant's sandbox **test results**, so retained evidence
+> from A5 is an onboarding input, not only engineering hygiene
+> (`docs/research/API_ACCESS_MTN_OM_CAMEROON.md` §10). Until A5 runs, no endpoint,
+> header or status path here is confirmed by an operator.
 >
 > **Migration numbering:** A8 took 004 (`004_provider_callback_refs`) and the
 > P2P increment took 005 (`005_transfers_and_direction`), so WS-1 and WS-6 take

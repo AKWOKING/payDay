@@ -341,7 +341,7 @@ These block work that cannot be done by writing code. Ordered by how much they u
 | 4 | **MTN sandbox credentials + Orange dev credentials + a public HTTPS callback URL** | Partner-portal work | A5 — the only thing that can confirm the operator contracts |
 | 5 | **SMS provider decision + sender ID registration** (MTN sender ID takes up to 3 weeks) | Procurement | WS-1, and OTP for password reset (LB-1) |
 | 6 | **KYC/IDV vendor decision + storage region** | Compliance | WS-6/LB-2, and mandatory app-store financial declaration |
-| 7 | **Licensing path clarity** (own agrément vs partner with a licensed PSP) | Founders | Whether custody is even permitted; shapes the ledger and float design |
+| 7 | **Licensing / custody route** — non-custodial, partner-of-record, or own agrément (research: `docs/research/API_ACCESS_MTN_OM_CAMEROON.md`) | Founders/board | Whether holding balances is permitted at all; shapes the ledger, float and the published product |
 | 8 | **Staging target** (cloud account, region, Postgres/Redis) | Founders | M2, all deployment evidence, R8 |
 
 ---
@@ -355,6 +355,9 @@ These block work that cannot be done by writing code. Ordered by how much they u
 | D-28 | Limit values: daily/monthly/balance ceilings | Product + Compliance | Enforcement defaults |
 | D-29 | Send routing: one endpoint (proposed) vs separate internal/external actions | Product | Frontend Send screen shape |
 | D-30 | Double-entry journal vs paired single-entry rows | Engineering | Revisit at merchant settlement / agent float |
+| D-31 | **Custody route**: non-custodial merchant, licensed partner of record, or own payment-institution agrément | Founders/board | Everything commercial; the wallet product itself |
+| D-32 | Operator contracts: direct with MMC + OMCM, or an aggregator (fee vs control) | Founders | Cost per transaction, payout availability, dispute handling |
+| D-33 | Payout funding (disbursement float) and whether Orange payout is contracted at all | Founders/engineering | Whether withdrawals can be guaranteed |
 
 ---
 
