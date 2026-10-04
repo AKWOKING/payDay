@@ -29,7 +29,8 @@ sequenced execution plan for everything remaining — see
 `docs/MVP_EXECUTION_ROADMAP.md`. That document is now the canonical order of
 work; this one remains the defect register and decision list.
 
-Test baseline: **258 passed, 2 skipped** (2026-10-04, after the materials-review
+Test baseline: **268 passed, 2 skipped** (2026-10-04, after the simulator/secrets
+lockdown; was 258/2 earlier the same day after the materials-review
 increment — ops overview, layer fitness functions and client-network rules; was
 238/2 earlier the same day after the infra-probe increment, 229/2 on 2026-09-17
 after M1 A1–A8, 133/2 before that work, and 100/1 before WS-0/3/5 + WS-2). One skip is the real-Redis
@@ -198,6 +199,42 @@ while receiving and self-funding do not. Tests:
 `tests/test_sprint7_p2p_transfer.py` (24). The published figures and the enforced
 ones now agree by default, which was one half of LB-14's fee/limit mismatch — the
 deposit-fee half still needs a product decision (D-27).
+
+---
+
+### LB-20 — found 2026-10-04 (backend recommendation audit)
+
+> **Fixed 2026-10-04.** Regression net: `tests/test_simulator_lockdown.py`.
+
+**The mock telco simulator was an unauthenticated way to mint balance.** The simulator
+endpoints (`/api/v1/mock-telco/{mtn,orange}/simulate-callback`) were mounted unconditionally,
+required no authentication, and settled through `transaction_manager.process_webhook`, which
+does no signature verification and no operator re-query — it goes straight to
+`_apply_settlement`. A deposit's `external_ref` is returned to the client that created it, so
+in a live deployment the sequence was: initiate a deposit, never pay, POST the simulator with
+that reference and `status: SUCCESSFUL`, then withdraw the invented balance.
+
+Fixed with two independent locks: `api/v1/router.py` mounts the simulator only when
+`TELCO_MODE=mock` (sandbox excluded deliberately, so A5's sandbox evidence cannot be faked by a
+local endpoint), and `process_webhook` refuses with `403 SIMULATOR_DISABLED` in live mode so a
+future route cannot re-open the mount gate. 10 tests; negative controls on all three guards.
+
+---
+
+### LB-21 — found 2026-10-04 (backend recommendation audit)
+
+> **Fixed 2026-10-04.** Regression net: `tests/test_simulator_lockdown.py`.
+
+**A production deployment would start on the repository's published secrets.** `SECRET_KEY`
+and `ENCRYPTION_KEY` default to constants committed in this public repository, and
+`docker-compose.yml` passed them through unchanged. `SECRET_KEY` signs every access and refresh
+token, so anyone who had read the source could mint a token for any account whose
+`token_version` is still the default — with no runtime symptom.
+
+Fixed by `validate_security_configuration()` in `core/config.py`, called from the lifespan
+before traffic is served: production refuses to start while either secret is the development
+default or shorter than 32 characters; `DEBUG=true` in production is a logged warning.
+Development and CI are unaffected.
 
 ---
 

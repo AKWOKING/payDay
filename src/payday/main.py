@@ -5,7 +5,11 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 
-from payday.core.config import settings, validate_telco_configuration
+from payday.core.config import (
+    settings,
+    validate_security_configuration,
+    validate_telco_configuration,
+)
 from payday.core.database import Base, engine
 from payday.core.counters import ensure_counters_ready
 from payday.core.exceptions import PayDayException
@@ -22,6 +26,15 @@ async def lifespan(app: FastAPI):
     # In production this refuses to start when Redis is required but
     # unreachable (fail-closed) — see docs/LAUNCH_BLOCKER_ROADMAP.md WS-0.
     await ensure_counters_ready()
+    # Validate signing/encryption material BEFORE serving traffic. In production
+    # this refuses to start while SECRET_KEY/ENCRYPTION_KEY are still the
+    # published development defaults — a deployment that keeps them lets anyone
+    # who has read this repository mint a token for any account, and nothing at
+    # runtime reveals it.
+    security_warnings = validate_security_configuration()
+    for warning in security_warnings:
+        logger.warning(f"[SECURITY] {warning}")
+
     # Validate the payment-channel configuration BEFORE serving traffic. In
     # production this refuses to start unless live operator credentials are
     # present, so a deployment can never silently run the mock adapter and

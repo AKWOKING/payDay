@@ -671,9 +671,26 @@ class TransactionManager:
         payload: WebhookCallbackPayload,
     ) -> Transaction:
         """
-        Processes an asynchronous status callback from MTN or Orange Money.
-        Applies state machine transitions: PROCESSING -> SUCCESS / FAILED.
+        Simulated status callback: PROCESSING -> SUCCESS / FAILED.
+
+        This is the *simulator* path. Unlike the operator webhook path in
+        `api/v1/webhooks.py`, it performs no signature verification and no
+        operator re-query, so it must never be reachable with real money: in
+        live mode it refuses, whatever route calls it. The route itself is also
+        gated (`api/v1/router.py: simulator_is_mounted`); this is the second
+        lock, so a future route cannot re-open the first one.
         """
+        if settings.TELCO_MODE == "live":
+            raise PayDayException(
+                status_code=403,
+                detail=(
+                    "The mock telco simulator is disabled in TELCO_MODE=live. "
+                    "Settlement in live mode requires a verified operator callback "
+                    "or an operator status re-query."
+                ),
+                code="SIMULATOR_DISABLED",
+            )
+
         query = select(Transaction)
         if payload.transaction_id:
             query = query.where(Transaction.transaction_id == payload.transaction_id)

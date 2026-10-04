@@ -712,6 +712,15 @@ curl -X POST http://localhost:8000/api/v1/webhooks/mtn \
 provider-shaped payloads. Both are sandbox aids — real webhooks are HMAC-SHA256
 verified with anti-replay protection.
 
+**The simulator is only reachable when the backend runs in `TELCO_MODE=mock`,**
+which is the default for local development and CI. It is mounted nowhere else —
+not in sandbox (A5 verifies our integration against the operators' own sandboxes,
+and a local endpoint that settles without them would invalidate that evidence)
+and never in live. If `/api/v1/mock-telco/...` returns `404`, the backend you are
+pointed at is not running in mock mode; that is deliberate, not a bug. The same
+lockdown means a forged callback cannot settle anything in a real deployment
+(`403 SIMULATOR_DISABLED`).
+
 ---
 
 ## 10. Integration Checklist

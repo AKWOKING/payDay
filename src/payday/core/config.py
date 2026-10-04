@@ -4,6 +4,17 @@ from pydantic import AnyHttpUrl, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+# Development defaults. These are public values in a public repository, so they
+# are safe only outside production — `validate_security_configuration` refuses to
+# start a production deployment that still uses them.
+DEVELOPMENT_SECRET_KEY = "payday-super-secret-development-key-change-in-production-min32chars"
+DEVELOPMENT_ENCRYPTION_KEY = "payday_aes256_secret_key_32bytes!"
+
+# Minimum length for HS256 signing material. A short secret is offline-brute-forceable
+# from a single captured token, which is an account-takeover primitive, not a weakness.
+MINIMUM_SECRET_LENGTH = 32
+
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "PayDay e-Wallet"
     VERSION: str = "1.0.0"
@@ -15,13 +26,13 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///./payday.db"
 
     # Security & Tokens
-    SECRET_KEY: str = "payday-super-secret-development-key-change-in-production-min32chars"
+    SECRET_KEY: str = DEVELOPMENT_SECRET_KEY
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
     # AES-256 Field Encryption Key (Must be 32 bytes or string hashed to 32 bytes)
-    ENCRYPTION_KEY: str = "payday_aes256_secret_key_32bytes!"
+    ENCRYPTION_KEY: str = DEVELOPMENT_ENCRYPTION_KEY
 
     # CORS
     # Explicit allowlist. Do NOT add "*" here: combined with
@@ -232,6 +243,10 @@ class Settings(BaseSettings):
         return f"{self.public_base_url}{self.API_V1_STR}/webhooks/orange"
 
 
+class SecurityConfigurationError(RuntimeError):
+    """Raised when a production deployment would start with unsafe security settings."""
+
+
 class TelcoConfigurationError(RuntimeError):
     """Raised when the telco configuration would move money unsafely."""
 
@@ -345,6 +360,59 @@ def validate_telco_configuration(settings_: "Settings | None" = None) -> list[st
         if s.ENVIRONMENT == "production":
             warnings.append("ENVIRONMENT=production is not using live telco mode.")
 
+    return warnings
+
+
+def validate_security_configuration(settings_: "Settings | None" = None) -> list[str]:
+    """Validate signing and encryption material; raise when it is unsafe to start.
+
+    Follows the same fail-closed precedent as `validate_telco_configuration` and
+    the WS-0 Redis rule: a production deployment that keeps the development
+    secrets refuses to start rather than logging a warning nobody reads.
+
+    Why this is fatal rather than a warning: `SECRET_KEY` signs every access and
+    refresh token. It is a published constant in this repository, so a deployment
+    that forgets to override it hands anyone who has read the source the ability
+    to mint a token for any account — including accounts whose `token_version` is
+    still the default. `ENCRYPTION_KEY` protects stored field-level secrets the
+    same way. Neither failure is detectable from the outside at runtime, which is
+    exactly why it must be caught at startup.
+
+    Returns warnings (non-fatal items) for the caller to log.
+    """
+    s = settings_ or settings
+    if s.ENVIRONMENT != "production":
+        return []
+
+    unsafe: list[str] = []
+    if s.SECRET_KEY == DEVELOPMENT_SECRET_KEY:
+        unsafe.append("SECRET_KEY is still the development default")
+    elif len(s.SECRET_KEY) < MINIMUM_SECRET_LENGTH:
+        unsafe.append(
+            f"SECRET_KEY is shorter than {MINIMUM_SECRET_LENGTH} characters "
+            "(offline-brute-forceable from one captured token)"
+        )
+
+    if s.ENCRYPTION_KEY == DEVELOPMENT_ENCRYPTION_KEY:
+        unsafe.append("ENCRYPTION_KEY is still the development default")
+    elif len(s.ENCRYPTION_KEY) < MINIMUM_SECRET_LENGTH:
+        unsafe.append(
+            f"ENCRYPTION_KEY is shorter than {MINIMUM_SECRET_LENGTH} characters"
+        )
+
+    if unsafe:
+        raise SecurityConfigurationError(
+            "ENVIRONMENT=production with unsafe security configuration:\n  - "
+            + "\n  - ".join(unsafe)
+            + "\nGenerate fresh values (e.g. `openssl rand -hex 32`) and set them "
+            "in the deployment environment."
+        )
+
+    warnings: list[str] = []
+    if s.DEBUG:
+        warnings.append(
+            "DEBUG=true in production: error responses may include internal detail."
+        )
     return warnings
 
 
