@@ -344,6 +344,32 @@ These block work that cannot be done by writing code. Ordered by how much they u
 | 7 | **Licensing / custody route** — non-custodial, partner-of-record, or own agrément (research: `docs/research/API_ACCESS_MTN_OM_CAMEROON.md`) | Founders/board | Whether holding balances is permitted at all; shapes the ledger, float and the published product |
 | 8 | **Staging target** (cloud account, region, Postgres/Redis) | Founders | M2, all deployment evidence, R8 |
 
+
+
+---
+
+## 20. Layer responsibilities (who may talk to whom)
+
+Enforced by `tests/test_architecture_layers.py` — the rules below are not conventions, they
+are tests that fail the build.
+
+| Layer | Owns | May import | Must never import |
+| --- | --- | --- | --- |
+| `api/` (routers, deps) | HTTP surface, authn/authz, request/response contracts | services, schemas, core, models | adapters — **except** `api/v1/webhooks.py`, the documented provider-protocol boundary |
+| `services/` | Business logic, transaction boundaries, provider orchestration | core, models, adapters, other services | api |
+| `adapters/` | One operator each: MTN, Orange, the simulator, the base contract | core, schemas | services, api |
+| `models/` | Persistence schema | core | services, adapters, api |
+| `schemas/` | Transport contracts (OpenAPI types) | core | services, adapters, api |
+| `core/` | Config, database, security, counters, logging, money, MSISDN | — (bottom of the stack) | services, adapters, api |
+
+Two consequences worth stating plainly:
+
+* Redis is reached only through `core/redis_client` (asserted), because a second client would
+  open its own pool and bypass the fail-closed startup check (WS-0).
+* A controller may not reach an operator directly. If a router needs an operator, the work
+  belongs in a service; the webhook exception exists because validating an operator's callback
+  *is* the protocol boundary, and it is asserted so it cannot spread.
+
 ---
 
 ## 15. Decisions required (register)
@@ -362,6 +388,8 @@ These block work that cannot be done by writing code. Ordered by how much they u
 | D-35 | `Cache-Control: no-store` is the default for every `/api/` response; caching is opt-in per route | Engineering | **Decided & implemented** — a cached balance is a wrong answer that looks right |
 | D-36 | The A8 status sweep must run on a single replica; electing a runner is a prerequisite for >1 replica | Engineering | Recorded as R28; blocks any horizontal-capacity claim |
 | D-37 | Scale-out, caching and service-extraction decisions are trigger-based, not aspirational | Engineering | `docs/design/INFRASTRUCTURE_SCALING_PLAN.md` §4–§5 |
+| D-38 | **Layer rules are executable**, not prose: `tests/test_architecture_layers.py` parses imports with `ast` and fails on an upward dependency | Engineering | **Decided & implemented**; the one exception (the webhook provider boundary) is asserted and must be deleted when no longer needed |
+| D-39 | Operational visibility is a first-class surface: `/admin/ops/overview` reports stuck PROCESSING, per-channel counts and sweep configuration | Product/engineering | **Implemented**; metrics scraping and alert routing remain open (LB-19) |
 
 ---
 

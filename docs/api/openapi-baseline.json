@@ -253,6 +253,37 @@
         "title": "APIResponse[NotificationListResponse]",
         "type": "object"
       },
+      "APIResponse_OpsOverviewResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpsOverviewResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "Operation completed successfully",
+            "title": "Message",
+            "type": "string"
+          },
+          "success": {
+            "default": true,
+            "title": "Success",
+            "type": "boolean"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "title": "APIResponse[OpsOverviewResponse]",
+        "type": "object"
+      },
       "APIResponse_PaginatedResponse_TransactionResponse__": {
         "properties": {
           "data": {
@@ -1325,6 +1356,65 @@
         "title": "NotificationStatus",
         "type": "string"
       },
+      "OpsOverviewResponse": {
+        "description": "Read-only operational snapshot over the ledger (`/admin/ops/overview`).",
+        "properties": {
+          "environment": {
+            "title": "Environment",
+            "type": "string"
+          },
+          "server_time": {
+            "format": "date-time",
+            "title": "Server Time",
+            "type": "string"
+          },
+          "stuck_processing": {
+            "$ref": "#/components/schemas/StuckProcessingResponse"
+          },
+          "sweep": {
+            "additionalProperties": true,
+            "title": "Sweep",
+            "type": "object"
+          },
+          "telco_mode": {
+            "title": "Telco Mode",
+            "type": "string"
+          },
+          "transactions_by_channel": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            "title": "Transactions By Channel",
+            "type": "object"
+          },
+          "transactions_by_status": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Transactions By Status",
+            "type": "object"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment",
+          "telco_mode",
+          "version",
+          "server_time",
+          "transactions_by_status",
+          "transactions_by_channel",
+          "stuck_processing",
+          "sweep"
+        ],
+        "title": "OpsOverviewResponse",
+        "type": "object"
+      },
       "PaginatedResponse_TransactionResponse_": {
         "properties": {
           "items": {
@@ -1896,6 +1986,36 @@
           "password"
         ],
         "title": "SetPinRequest",
+        "type": "object"
+      },
+      "StuckProcessingResponse": {
+        "description": "Transactions the sweep should have settled but has not.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "oldest_age_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Age Seconds"
+          },
+          "threshold_seconds": {
+            "title": "Threshold Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "threshold_seconds"
+        ],
+        "title": "StuckProcessingResponse",
         "type": "object"
       },
       "TokenResponse": {
@@ -2976,6 +3096,145 @@
           }
         ],
         "summary": "Get System Audit Logs (Admin / Auditor)",
+        "tags": [
+          "Admin Back-Office"
+        ]
+      }
+    },
+    "/api/v1/admin/ops/overview": {
+      "get": {
+        "description": "Read-only aggregate over the ledger for on-call use: transaction counts by status and by channel, transactions stuck in PROCESSING beyond the threshold the sweep should have cleared, and whether the status sweep is configured. Answers 'is money stuck, is one operator broken, is the machine that fixes it switched on' without reading logs.",
+        "operationId": "ops_overview_api_v1_admin_ops_overview_get",
+        "parameters": [
+          {
+            "description": "Override the stuck-PROCESSING threshold (default from settings).",
+            "in": "query",
+            "name": "stuck_after_seconds",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 86400,
+                  "minimum": 60,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Override the stuck-PROCESSING threshold (default from settings).",
+              "title": "Stuck After Seconds"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIResponse_OpsOverviewResponse_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Request — RFC 7807 Problem Details"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unauthorized — missing or invalid credentials"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden — insufficient role or ownership"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict — e.g. idempotency or state transition"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Operational Overview (Admin)",
         "tags": [
           "Admin Back-Office"
         ]

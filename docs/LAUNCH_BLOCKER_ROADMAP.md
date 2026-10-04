@@ -29,9 +29,10 @@ sequenced execution plan for everything remaining — see
 `docs/MVP_EXECUTION_ROADMAP.md`. That document is now the canonical order of
 work; this one remains the defect register and decision list.
 
-Test baseline: **238 passed, 2 skipped** (2026-10-04, after the infra-probe and
-cache-safety increment; was 229/2 on 2026-09-17 after M1 A1–A8, 133/2 before
-that work, and 100/1 before WS-0/3/5 + WS-2). One skip is the real-Redis
+Test baseline: **258 passed, 2 skipped** (2026-10-04, after the materials-review
+increment — ops overview, layer fitness functions and client-network rules; was
+238/2 earlier the same day after the infra-probe increment, 229/2 on 2026-09-17
+after M1 A1–A8, 133/2 before that work, and 100/1 before WS-0/3/5 + WS-2). One skip is the real-Redis
 integration test that runs when `PAYDAY_TEST_REDIS_URL` is set, as CI does; the
 other is the `alg=none` test the local JOSE library refuses to mint.
 
@@ -197,6 +198,29 @@ while receiving and self-funding do not. Tests:
 `tests/test_sprint7_p2p_transfer.py` (24). The published figures and the enforced
 ones now agree by default, which was one half of LB-14's fee/limit mismatch — the
 deposit-fee half still needs a product decision (D-27).
+
+---
+
+### LB-19 — found 2026-10-04 (materials review)
+
+> **Partially closed 2026-10-04; the remaining half is open.**
+> Context: `docs/research/MATERIALS_REVIEW_2026-10-04.md` §5.
+
+**We were running a money system with health probes and logs, and nothing in between.** If the
+A8 status sweep stopped running, or one operator began failing every withdrawal, the first
+observer would have been a customer: a transaction stuck in `PROCESSING` is money the customer
+believes is moving and we have not settled.
+
+Closed by `/api/v1/admin/ops/overview`: stuck-PROCESSING count with the age of the oldest,
+transaction counts per status and per channel (so one broken operator is distinguishable from
+a general problem), and the sweep's own configuration so "the safety net is off" is visible
+rather than assumed. Read-only, admin/auditor only.
+
+**Still open:** the endpoint is pull-based — nobody is paged. There is no metrics scraping
+(Prometheus/OpenMetrics), no alert rule, and no routing to a human. Closing it needs: a scrape
+target, an alert on `stuck_processing.count > 0` sustained over a window, an alert when the
+sweep is configured off or its last successful pass is stale (which needs the sweep to record
+a heartbeat — R29/R28 territory), and someone to receive the page (D20's operations decision).
 
 ---
 

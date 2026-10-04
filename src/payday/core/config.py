@@ -129,6 +129,12 @@ class Settings(BaseSettings):
     # the customer, so minutes).
     TELCO_STATUS_SWEEP_MIN_AGE_SECONDS: int = 120
     TELCO_STATUS_SWEEP_BATCH_SIZE: int = 50
+
+    # Ops: a PROCESSING transaction older than this is reported as stuck by
+    # /admin/ops/overview. Defaults well above the sweep's own 120s window, so
+    # the alert means "the sweep is not clearing it", not "the sweep has not
+    # run yet".
+    OPS_STUCK_PROCESSING_SECONDS: int = 900
     # Reject a number whose prefix belongs to a different operator. Off by
     # default because Cameroon has number portability and published prefix
     # tables disagree — see core/msisdn.py.

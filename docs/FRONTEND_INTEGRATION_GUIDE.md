@@ -806,3 +806,93 @@ show a signed amount and a counterparty without extra calls.
 
 Amounts are whole francs as JSON numbers. Never format them with decimals for the
 wire, and never send a fractional amount — it is rejected with `VALIDATION_ERROR`.
+
+---
+
+## 13. Client behaviour on Cameroonian networks (Flutter)
+
+Most of this app's users are on older Android devices, metered data and networks that drop
+mid-request. That is a product constraint, not an edge case, and it changes the rules for a
+money client: **reads may be stale, writes may never be guessed at.** The rules below are
+requirements, not suggestions — each one prevents a class of "the app told me something that
+was not true" bug.
+
+### 13.1 Never show success the server did not confirm
+
+There is no optimistic success anywhere in the money path. A transfer, deposit or withdrawal
+shows as pending until a response says otherwise:
+
+| What you got back | What the screen must say |
+| --- | --- |
+| `200`/`202` with `status: SUCCESS` | Done, with the amount actually charged |
+| `202` with `status: PROCESSING` | **Pending, not failed** — "we are confirming with your operator" |
+| Timeout / connection lost | **Unknown** — "we could not confirm; check history" and re-poll |
+| `4xx` with an error code | Failed, with the code's message (see §2) |
+
+The dangerous mistake is treating a timeout as failure. A withdrawal can be PROCESSING at
+the operator while the client's socket dies; showing "failed" invites the user to try again,
+and a customer who pays twice is a support incident with our name on it.
+
+### 13.2 Retries: one key, one payment
+
+* Send `idempotency_key` on **every** money request (§1).
+* Retry the *same* request with the *same* key. Never generate a new key for a retry — that
+  is a second payment, not a retry.
+* On `PROCESSING`, do not resubmit at all: poll the transaction instead.
+* Retry on network errors and `5xx` only; a `4xx` is a decision, not a hiccup.
+
+### 13.3 Polling, not sockets
+
+Poll `GET /api/v1/wallet/transactions/{transaction_id}` until the status is terminal
+(`SUCCESS`, `FAILED`, `REVERSED`):
+
+* back off — start at ~2s, double to a ~30s ceiling, stop after ~2 minutes and tell the user
+  to check history (the backend's sweep keeps working after you stop asking);
+* respect `Retry-After` when present; the API rate-limits per account and a hot loop will be
+  throttled;
+* do not open a websocket for this. It costs battery and data on the devices our users
+  actually have, and the status changes are not real-time-critical.
+
+### 13.4 Offline: reads may be cached, writes may not be queued
+
+* **Never queue a money write for later.** An outbox that fires a payment when the phone
+  finds signal hours later is a payment the user no longer expects. Money writes require a
+  live request (and the PIN entry that goes with it).
+* Reads (`balance`, recent transactions, fee tables) may be cached **with an explicit
+  "as of HH:MM" label**, and must be refreshed before any money decision — never let a cached
+  balance gate a transfer amount.
+* If the app is offline, say so and disable the action; do not spin forever.
+
+### 13.5 Payload discipline (costs the user money)
+
+* Use `page_size` (max 100) and paginate; never fetch the whole history to show five rows.
+* Prefer `GET /api/v1/wallet/transactions/{id}` over re-listing to watch one payment.
+* Don't poll the balance on a timer; fetch on screen entry and after an action.
+* Cache static assets (icons, fonts, fee tables) on-device — they are the cheap part.
+* Do **not** build a local cache of balances that survives app restarts and is shown as
+  current. A stale balance with no timestamp is worse than a spinner.
+
+### 13.6 On-device expectations
+
+* Support older Android versions and low-RAM devices; avoid heavy background work.
+* French and English from the same build (see §1 conventions) — amounts and dates as agreed
+  there; phone numbers always displayed in local `6XX XXX XXX` form.
+* The PIN pad must work one-handed on a small screen; biometrics (if added) are a convenience
+  layer, never the only path, and never a substitute for the PIN the server verifies.
+
+### 13.7 Admin: operation visibility
+
+The Angular admin portal has `GET /api/v1/admin/ops/overview` for the on-call screen:
+
+* `stuck_processing` — transactions in PROCESSING longer than the sweep's window, with the
+  age of the oldest. Non-zero means money is waiting and the operator has not confirmed; this
+  is the number to put on a dashboard.
+* `transactions_by_channel` — so a single broken operator is visible instead of hidden inside
+  a healthy overall rate.
+* `sweep` — whether the safety net that clears lost callbacks is switched on, with its
+  interval and batch size. An environment running without it is a misconfiguration, not a
+  variant.
+
+The endpoint accepts `stuck_after_seconds` (60–86400) to inspect a different window; the
+default comes from `OPS_STUCK_PROCESSING_SECONDS` (900s).
+

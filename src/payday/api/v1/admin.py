@@ -12,6 +12,7 @@ from payday.schemas.user import UserResponse
 from payday.schemas.wallet import UpdateLimitsRequest, WalletStatusUpdateRequest, WalletResponse
 from payday.schemas.admin import (
     AdminTransactionListResponse,
+    OpsOverviewResponse,
     AdminTransactionItemResponse,
     ManualReversalRequest,
     ReconciliationRequest,
@@ -23,6 +24,7 @@ from payday.services.auth_service import auth_service
 from payday.services.wallet_engine import wallet_engine
 from payday.services.audit_service import audit_service
 from payday.services.reconciliation_service import reconciliation_service
+from payday.services.ops_service import build_overview
 from payday.services.transaction_manager import transaction_manager
 from payday.api.deps import require_roles
 from payday.models.user import User, UserRole, UserStatus
@@ -416,5 +418,48 @@ async def get_audit_logs(
             page=page,
             page_size=page_size,
             items=[AuditLogItemResponse.model_validate(log) for log in items],
+        ),
+    )
+
+
+@router.get(
+    "/ops/overview",
+    response_model=APIResponse[OpsOverviewResponse],
+    summary="Operational Overview (Admin)",
+    description=(
+        "Read-only aggregate over the ledger for on-call use: transaction counts "
+        "by status and by channel, transactions stuck in PROCESSING beyond the "
+        "threshold the sweep should have cleared, and whether the status sweep is "
+        "configured. Answers 'is money stuck, is one operator broken, is the "
+        "machine that fixes it switched on' without reading logs."
+    ),
+)
+async def ops_overview(
+    stuck_after_seconds: Optional[int] = Query(
+        None,
+        ge=60,
+        le=86400,
+        description="Override the stuck-PROCESSING threshold (default from settings).",
+    ),
+    current_admin: User = Depends(require_roles(UserRole.ADMIN, UserRole.AUDITOR)),
+    db: AsyncSession = Depends(get_db),
+):
+    overview = await build_overview(db, stuck_after_seconds=stuck_after_seconds)
+    return APIResponse(
+        success=True,
+        message="Operational overview",
+        data=OpsOverviewResponse(
+            environment=overview.environment,
+            telco_mode=overview.telco_mode,
+            version=overview.version,
+            server_time=overview.server_time,
+            transactions_by_status=overview.transactions_by_status,
+            transactions_by_channel=overview.transactions_by_channel,
+            stuck_processing={
+                "count": overview.stuck_processing.count,
+                "oldest_age_seconds": overview.stuck_processing.oldest_age_seconds,
+                "threshold_seconds": overview.stuck_processing.threshold_seconds,
+            },
+            sweep=overview.sweep,
         ),
     )
