@@ -93,9 +93,13 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"
     healthcheck:
+      # /health/ready answers 503 when the database or the shared counter store
+      # is unreachable, so an orchestrator can stop routing to this container.
+      # /health always answers 200 and cannot gate anything, so it is not used
+      # here (docs/design/INFRASTRUCTURE_SCALING_PLAN.md §probes).
       test:
         ["CMD-SHELL",
-         "curl --fail --silent http://localhost:8000/api/v1/public/health || exit 1"]
+         "curl --fail --silent http://localhost:8000/api/v1/public/health/ready || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

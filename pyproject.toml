@@ -36,5 +36,17 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# One event loop for the whole session, rather than a fresh loop per test.
+#
+# The test engine is a module-global SQLite StaticPool: exactly one DBAPI
+# connection, shared by every test. aiosqlite binds that connection's internal
+# lock to the loop that first uses it, so a per-test loop makes any *concurrent*
+# test fail with "Lock object is bound to a different event loop" purely because
+# of test ordering. That was a real flake (load-capacity burst tests failed
+# depending on which test ran first) and it made the suite's result depend on
+# order. One long-lived loop also matches production, where the app runs in a
+# single loop for the life of the process.
+asyncio_default_test_loop_scope = "session"
+asyncio_default_fixture_loop_scope = "session"
 testpaths = ["tests"]
 python_files = "test_*.py"

@@ -5689,7 +5689,7 @@
     },
     "/api/v1/public/health": {
       "get": {
-        "description": "Returns backend server health and timestamp.",
+        "description": "Reports the state of the service and its dependencies. Kept for backwards compatibility with existing dashboards and clients. It always answers 200, so it is a status report, NOT a load-balancer or orchestrator probe — use /health/live to decide whether to restart an instance and /health/ready to decide whether it should receive traffic.",
         "operationId": "health_check_api_v1_public_health_get",
         "responses": {
           "200": {
@@ -5794,6 +5794,223 @@
           }
         },
         "summary": "Health & Liveness Probe",
+        "tags": [
+          "Public & Landing Page"
+        ]
+      }
+    },
+    "/api/v1/public/health/live": {
+      "get": {
+        "description": "Answers one question: is this process able to serve HTTP at all? It deliberately touches no dependency — a liveness failure means 'restart this instance', and that must never be triggered by a database or Redis outage that every instance is experiencing.",
+        "operationId": "liveness_probe_api_v1_public_health_live_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIResponse_dict_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Request — RFC 7807 Problem Details"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unauthorized — missing or invalid credentials"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden — insufficient role or ownership"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict — e.g. idempotency or state transition"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable — e.g. shared state store down"
+          }
+        },
+        "summary": "Liveness Probe",
+        "tags": [
+          "Public & Landing Page"
+        ]
+      }
+    },
+    "/api/v1/public/health/ready": {
+      "get": {
+        "description": "Answers: should this instance receive traffic? Checks the two dependencies whose absence makes money operations incorrect — the database and the shared counter store. Returns 503 when either is down so a load balancer, autoscaler or orchestrator can act on it; the previous single /health probe always answered 200 even when Redis was unreachable, which no orchestrator can act on.",
+        "operationId": "readiness_probe_api_v1_public_health_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIResponse_dict_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Request — RFC 7807 Problem Details"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unauthorized — missing or invalid credentials"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden — insufficient role or ownership"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict — e.g. idempotency or state transition"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests — rate limit exceeded (Retry-After set)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "description": "One or more critical dependencies are unavailable"
+          }
+        },
+        "summary": "Readiness Probe",
         "tags": [
           "Public & Landing Page"
         ]

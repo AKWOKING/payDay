@@ -97,6 +97,27 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def no_store_api_responses(request: Request, call_next):
+    """Refuse to let any intermediary cache an API response.
+
+    This is the default for the whole API, not a per-route decision: a cached
+    balance, transaction list or receipt is a wrong answer about money, and the
+    failure is invisible — the customer sees a stale figure that looks real.
+    Browsers, service workers, corporate proxies and a CDN placed in front of
+    the API all honour this, so the default has to be `no-store` rather than
+    something a route must remember to set.
+
+    A route that ever *should* be cacheable (a static fee table, say) can set
+    its own Cache-Control and opt in explicitly; everything else inherits
+    `no-store`, including error responses.
+    """
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
+
+
 # Exception Handlers (RFC 7807)
 @app.exception_handler(PayDayException)
 async def payday_exception_handler(request: Request, exc: PayDayException):

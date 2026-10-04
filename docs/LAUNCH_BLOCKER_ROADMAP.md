@@ -29,8 +29,9 @@ sequenced execution plan for everything remaining — see
 `docs/MVP_EXECUTION_ROADMAP.md`. That document is now the canonical order of
 work; this one remains the defect register and decision list.
 
-Test baseline: **229 passed, 2 skipped** (2026-09-17, after M1 A1–A8; was 133/2
-before that work, and 100/1 before WS-0/3/5 + WS-2). One skip is the real-Redis
+Test baseline: **238 passed, 2 skipped** (2026-10-04, after the infra-probe and
+cache-safety increment; was 229/2 on 2026-09-17 after M1 A1–A8, 133/2 before
+that work, and 100/1 before WS-0/3/5 + WS-2). One skip is the real-Redis
 integration test that runs when `PAYDAY_TEST_REDIS_URL` is set, as CI does; the
 other is the `alg=none` test the local JOSE library refuses to mint.
 
@@ -74,7 +75,7 @@ authentication layer, both found by reading the code rather than the docs.
 | LB-2 | No KYC document upload — identity unverifiable | 🔴🔒 | `api/v1/kyc.py` — no `UploadFile` anywhere |
 | LB-3 | Notifications are never delivered | 🔴🔒💰⏳ | `notification_service.py:68` fabricates a device token; no outbound call |
 | LB-4 | PIN counter is per-process — 5N attempts on N replicas | 🟠 | `transaction_manager.py:49` `_failed_pin_attempts: Dict[str, int] = {}` |
-| LB-5 | No load test against PostgreSQL | 🟠🔒 | Sprint 4 numbers are in-process ASGI over SQLite |
+| LB-5 | No load test against PostgreSQL | 🟠🔒 | Sprint 4 numbers are in-process ASGI over SQLite. Before any *horizontal* claim, run the multi-replica checklist in `docs/design/INFRASTRUCTURE_SCALING_PLAN.md` §4 (R28 sweep election, no process-local state) |
 | **LB-6** | **Login is completely unthrottled** | 🔴 | `auth_service.py:92-96` — no counter, no lockout, no rate limit |
 | **LB-7** | **Refresh tokens cannot be revoked** | ✅ | Fixed 2026-09-13 — `users.token_version` + `tv` claim; validity is no longer status-only |
 

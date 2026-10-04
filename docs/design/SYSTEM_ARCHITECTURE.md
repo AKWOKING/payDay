@@ -358,6 +358,10 @@ These block work that cannot be done by writing code. Ordered by how much they u
 | D-31 | **Custody route**: non-custodial merchant, licensed partner of record, or own payment-institution agrément | Founders/board | Everything commercial; the wallet product itself |
 | D-32 | Operator contracts: direct with MMC + OMCM, or an aggregator (fee vs control) | Founders | Cost per transaction, payout availability, dispute handling |
 | D-33 | Payout funding (disbursement float) and whether Orange payout is contracted at all | Founders/engineering | Whether withdrawals can be guaranteed |
+| D-34 | Probes: liveness touches nothing, readiness fails (503) when a dependency is down | Engineering | **Decided & implemented** — `docs/design/INFRASTRUCTURE_SCALING_PLAN.md` §2 |
+| D-35 | `Cache-Control: no-store` is the default for every `/api/` response; caching is opt-in per route | Engineering | **Decided & implemented** — a cached balance is a wrong answer that looks right |
+| D-36 | The A8 status sweep must run on a single replica; electing a runner is a prerequisite for >1 replica | Engineering | Recorded as R28; blocks any horizontal-capacity claim |
+| D-37 | Scale-out, caching and service-extraction decisions are trigger-based, not aspirational | Engineering | `docs/design/INFRASTRUCTURE_SCALING_PLAN.md` §4–§5 |
 
 ---
 
