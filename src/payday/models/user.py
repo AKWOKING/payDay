@@ -1,5 +1,5 @@
 import enum
-from sqlalchemy import Column, String, Enum, LargeBinary
+from sqlalchemy import Column, String, Enum, Integer, LargeBinary
 from sqlalchemy.orm import relationship
 from payday.models.base import TimeStampedModel, generate_uuid
 
@@ -31,6 +31,18 @@ class User(TimeStampedModel):
     email = Column(String(120), unique=True, nullable=True, index=True)
     password_hash = Column(String(255), nullable=False)
     pin_hash = Column(String(255), nullable=True)
+
+    # Session revocation counter (WS-2 / LB-7).
+    #
+    # Every access and refresh token carries this value in its `tv` claim at
+    # the moment it is minted. A token whose `tv` no longer matches is
+    # rejected. Incrementing the counter therefore invalidates every token
+    # issued before the increment — which is the only way to evict a stolen
+    # refresh token short of suspending the account, and the prerequisite for
+    # password reset (LB-1) actually removing an attacker.
+    token_version = Column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     
     # KYC Details (Encrypted PII at rest)
     id_document_no_encrypted = Column(LargeBinary, nullable=True)

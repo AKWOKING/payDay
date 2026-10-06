@@ -1,27 +1,71 @@
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 
-from payday.core.config import settings
+from payday.core.config import (
+    settings,
+    validate_security_configuration,
+    validate_telco_configuration,
+)
 from payday.core.database import Base, engine
+from payday.core.counters import ensure_counters_ready
 from payday.core.exceptions import PayDayException
 from payday.core.logging import logger
+from payday.core.redis_client import close_redis
 from payday.schemas.common import ProblemDetail
 from payday.api.v1.router import api_router
+from payday.services.status_sweep import run_status_sweep_forever
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Create tables if not existing (useful for local dev / testing)
+    # Startup: validate the shared counter store BEFORE serving traffic.
+    # In production this refuses to start when Redis is required but
+    # unreachable (fail-closed) — see docs/LAUNCH_BLOCKER_ROADMAP.md WS-0.
+    await ensure_counters_ready()
+    # Validate signing/encryption material BEFORE serving traffic. In production
+    # this refuses to start while SECRET_KEY/ENCRYPTION_KEY are still the
+    # published development defaults — a deployment that keeps them lets anyone
+    # who has read this repository mint a token for any account, and nothing at
+    # runtime reveals it.
+    security_warnings = validate_security_configuration()
+    for warning in security_warnings:
+        logger.warning(f"[SECURITY] {warning}")
+
+    # Validate the payment-channel configuration BEFORE serving traffic. In
+    # production this refuses to start unless live operator credentials are
+    # present, so a deployment can never silently run the mock adapter and
+    # accept deposits that never settle (M1 / LB-8).
+    telco_warnings = validate_telco_configuration()
+    for warning in telco_warnings:
+        logger.warning(f"[TELCO] {warning}")
+    logger.info(f"Payment channels running in TELCO_MODE={settings.TELCO_MODE}")
+
+    # Periodic authoritative status sweep (M1 / A8). Both operators document
+    # notifications that never arrive; without this, a transaction whose callback
+    # is lost stays PROCESSING and the customer's money is in limbo. Started only
+    # when configured, so tests and mock mode are unaffected.
+    sweep_task = None
+    if settings.TELCO_STATUS_SWEEP_ENABLED:
+        sweep_task = asyncio.create_task(run_status_sweep_forever())
+    # Create tables if not existing (useful for local dev / testing)
     logger.info(f"Starting {settings.PROJECT_NAME} v{settings.VERSION} [{settings.ENVIRONMENT}]")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database schema initialized.")
     yield
     # Shutdown
+    if sweep_task is not None:
+        sweep_task.cancel()
+        try:
+            await sweep_task
+        except asyncio.CancelledError:
+            pass
     logger.info("Shutting down PayDay backend.")
+    await close_redis()
     await engine.dispose()
 
 
@@ -64,6 +108,27 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID"],
 )
+
+
+@app.middleware("http")
+async def no_store_api_responses(request: Request, call_next):
+    """Refuse to let any intermediary cache an API response.
+
+    This is the default for the whole API, not a per-route decision: a cached
+    balance, transaction list or receipt is a wrong answer about money, and the
+    failure is invisible — the customer sees a stale figure that looks real.
+    Browsers, service workers, corporate proxies and a CDN placed in front of
+    the API all honour this, so the default has to be `no-store` rather than
+    something a route must remember to set.
+
+    A route that ever *should* be cacheable (a static fee table, say) can set
+    its own Cache-Control and opt in explicitly; everything else inherits
+    `no-store`, including error responses.
+    """
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
 
 
 # Exception Handlers (RFC 7807)
@@ -126,6 +191,16 @@ from fastapi.responses import JSONResponse, HTMLResponse
 # Root endpoint with interactive preview HTML
 @app.get("/", response_class=HTMLResponse, tags=["General"])
 async def root():
+    # The page previously advertised both channels as "Adapter Active" even when
+    # the in-process simulator was serving every request. State the real mode.
+    channel_labels = {
+        "live": ("bg-success", "LIVE"),
+        "sandbox": ("bg-info text-dark", "Operator Sandbox"),
+        "mock": ("bg-secondary", "Simulated — no real money"),
+    }
+    channel_badge_class, channel_badge_text = channel_labels.get(
+        settings.TELCO_MODE, ("bg-secondary", settings.TELCO_MODE)
+    )
     return f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -214,7 +289,7 @@ async def root():
                             <div class="channel-card h-100">
                                 <div class="d-flex justify-content-between align-items-center mb-2">
                                     <h5 class="mb-0 text-warning"><i class="fa-solid fa-mobile-screen-button me-2"></i>MTN MoMo</h5>
-                                    <span class="badge bg-success">Adapter Active</span>
+                                    <span class="badge {channel_badge_class}">{channel_badge_text}</span>
                                 </div>
                                 <small class="text-secondary">RequestToPay collection &amp; Transfer disbursement, HMAC-verified webhooks with anti-replay.</small>
                             </div>
@@ -223,7 +298,7 @@ async def root():
                             <div class="channel-card h-100">
                                 <div class="d-flex justify-content-between align-items-center mb-2">
                                     <h5 class="mb-0 text-warning" style="color: #f97316 !important;"><i class="fa-solid fa-wallet me-2"></i>Orange Money</h5>
-                                    <span class="badge bg-success">Adapter Active</span>
+                                    <span class="badge {channel_badge_class}">{channel_badge_text}</span>
                                 </div>
                                 <small class="text-secondary">Web Payment initiation &amp; payout webhook listeners, multi-channel bridge live.</small>
                             </div>
@@ -276,7 +351,9 @@ _ERROR_RESPONSES = {
     404: {"model": ProblemDetail, "description": "Not Found"},
     409: {"model": ProblemDetail, "description": "Conflict — e.g. idempotency or state transition"},
     422: {"model": ProblemDetail, "description": "Validation Error"},
+    429: {"model": ProblemDetail, "description": "Too Many Requests — rate limit exceeded (Retry-After set)"},
     500: {"model": ProblemDetail, "description": "Internal Server Error"},
+    503: {"model": ProblemDetail, "description": "Service Unavailable — e.g. shared state store down"},
 }
 
 app.include_router(api_router, prefix=settings.API_V1_STR, responses=_ERROR_RESPONSES)

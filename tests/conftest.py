@@ -37,6 +37,24 @@ TestAsyncSessionLocal = async_sessionmaker(
 )
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def reset_shared_counters() -> AsyncGenerator[None, None]:
+    """Isolate the shared counter/limiter singletons between test cases.
+
+    The app-global store is process-wide (a rate-limit or PIN bucket must not
+    leak from one test into the next). Tests that want a *shared* budget test
+    it explicitly by constructing stores over a shared fakeredis server.
+    """
+    from payday.core.counters import reset_counter_store
+    from payday.core.ratelimit import reset_rate_limiter
+
+    reset_counter_store()
+    reset_rate_limiter()
+    yield
+    reset_counter_store()
+    reset_rate_limiter()
+
+
 @pytest_asyncio.fixture(scope="function")
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     async with test_engine.begin() as conn:
@@ -120,11 +138,19 @@ async def test_admin(db_session: AsyncSession) -> User:
 
 @pytest_asyncio.fixture
 def user_auth_headers(test_user: User) -> dict:
-    token = create_access_token(subject=test_user.user_id, role=test_user.role.value)
+    token = create_access_token(
+        subject=test_user.user_id,
+        role=test_user.role.value,
+        token_version=test_user.token_version,
+    )
     return {"Authorization": f"Bearer {token}"}
 
 
 @pytest_asyncio.fixture
 def admin_auth_headers(test_admin: User) -> dict:
-    token = create_access_token(subject=test_admin.user_id, role=test_admin.role.value)
+    token = create_access_token(
+        subject=test_admin.user_id,
+        role=test_admin.role.value,
+        token_version=test_admin.token_version,
+    )
     return {"Authorization": f"Bearer {token}"}

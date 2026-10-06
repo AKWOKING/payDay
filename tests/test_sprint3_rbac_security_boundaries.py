@@ -72,6 +72,7 @@ async def test_admin_rbac_expired_token_rejection(
     expired_token = create_access_token(
         subject=test_admin.user_id,
         role=test_admin.role.value,
+        token_version=test_admin.token_version,
         expires_delta=timedelta(minutes=-10), # Expired 10 mins ago
     )
     expired_headers = {"Authorization": f"Bearer {expired_token}"}

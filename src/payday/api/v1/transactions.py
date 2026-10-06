@@ -9,6 +9,7 @@ from payday.core.database import get_db
 from payday.schemas.common import APIResponse, PaginatedResponse
 from payday.schemas.transaction import (
     DepositInitiateRequest,
+    TransferInitiateRequest,
     WithdrawInitiateRequest,
     TransactionResponse,
     TransactionReceiptResponse,
@@ -64,6 +65,53 @@ async def withdraw(
     return APIResponse(
         success=(tx.status in (TransactionStatus.SUCCESS, TransactionStatus.PROCESSING, TransactionStatus.PENDING)),
         message=msg,
+        data=TransactionResponse.model_validate(tx),
+    )
+
+
+@router.post(
+    "/transfer",
+    response_model=APIResponse[TransactionResponse],
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Send Money to a Phone Number (PayDay or Mobile Money)",
+    description=(
+        "Sends money to a phone number. If the recipient holds a PayDay wallet the "
+        "transfer is an internal ledger move: final, instant, and free. Otherwise "
+        "supply `channel` (MTN or ORANGE) and the money is paid out through the "
+        "operator, returning a PROCESSING transaction to be confirmed "
+        "asynchronously. `direction`, `counterparty_msisdn_masked` and `internal` "
+        "on the response say which happened."
+    ),
+)
+async def transfer(
+    req: TransferInitiateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tx = await transaction_manager.initiate_transfer(db, current_user, req)
+
+    if tx.type == TransactionType.TRANSFER:
+        message = (
+            f"Sent {tx.amount} XAF to {tx.counterparty_msisdn_masked}."
+            if tx.status == TransactionStatus.SUCCESS
+            else f"Transfer is {tx.status.value.lower()}."
+        )
+    else:
+        # Delegated to the operator payout path.
+        message = (
+            "Transfer is processing with the operator."
+            if tx.status == TransactionStatus.PROCESSING
+            else "Transfer completed successfully."
+            if tx.status == TransactionStatus.SUCCESS
+            else f"Transfer failed: {tx.failure_reason}"
+        )
+
+    return APIResponse(
+        success=(
+            tx.status
+            in (TransactionStatus.SUCCESS, TransactionStatus.PROCESSING, TransactionStatus.PENDING)
+        ),
+        message=message,
         data=TransactionResponse.model_validate(tx),
     )
 

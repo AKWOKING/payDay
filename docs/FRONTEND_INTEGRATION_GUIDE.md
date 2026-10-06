@@ -1,6 +1,8 @@
 # PayDay — Frontend Integration Guide
 
-**Version:** 2.0 · **Date:** 2026-09-07
+**Version:** 2.1 · **Date:** 2026-09-13
+**Changed in 2.1:** `POST /auth/logout` and the `SESSION_REVOKED` error code —
+sessions are now revocable server-side, and logout is account-wide.
 **Contract:** OpenAPI 3.1 · `/openapi.json` · baseline snapshot at `docs/api/openapi-baseline.json`
 **Design:** [PayDay UI/UX Design](https://www.figma.com/design/I5wNdk5TDrfvNNOvpyAszM/PayDay-UI-UX-Design?node-id=0-1&m=dev)
 **Audience:** Flutter mobile, Angular landing page, Angular admin back-office
@@ -108,6 +110,9 @@ one. This is the difference between a flaky network and a double withdrawal.
 | --- | ---: | --- | --- |
 | `VALIDATION_ERROR` | 422 | Invalid body/params | Field errors in `extra.errors[]` — map to form fields |
 | `AUTHENTICATION_FAILED` | 401 | Missing/invalid/expired token | Refresh once, then log out |
+| `SESSION_REVOKED` | 401 | Session ended server-side (logout, suspension, password reset) | **Do not refresh.** Clear credentials, go to Login |
+| `RATE_LIMITED` | 429 | Too many attempts on an auth endpoint | Wait `Retry-After` seconds before retrying; do not spin |
+| `REDIS_UNAVAILABLE` | 503 | Shared state store down; the request failed closed | Transient — retry later, do not treat as user error |
 | `PERMISSION_DENIED` | 403 | Role insufficient | Hide the affordance |
 | `USER_NOT_FOUND` | 404 | No such user | |
 | `USER_ALREADY_EXISTS` | 409 | Phone already registered | Offer login |
@@ -121,6 +126,11 @@ one. This is the difference between a flaky network and a double withdrawal.
 | `KYC_REQUIRED` | 403 | KYC not verified | Route to **Verify Account 1** |
 | `DUPLICATE_TRANSACTION` | 409 | Idempotency key reused | Treat as success; fetch the original |
 | `INVALID_STATE_TRANSITION` | 409 | Illegal status change | Refresh the transaction |
+| `RECIPIENT_NOT_ON_PAYDAY` | 400 | Transfer recipient has no PayDay wallet | Show `extra.suggested_channel` as a default and ask for MTN/ORANGE, then retry with `channel` |
+| `RECIPIENT_NOT_ACTIVE` | 400 | Recipient's account is not active | Explain that the recipient cannot receive right now |
+| `SELF_TRANSFER` | 400 | Sender and recipient are the same wallet | Block it in the UI before sending |
+| `BALANCE_CEILING_EXCEEDED` | 400 | Credit would exceed the wallet ceiling | Show `extra.ceiling` and the shortfall; the sender is not charged |
+| `MONTHLY_LIMIT_EXCEEDED` | 400 | Month's outgoing ceiling reached | Show `extra.monthly_limit` and `extra.current_total`; it counts withdrawals **and** transfers |
 | `CHANNEL_NOT_AVAILABLE` | 400 | UBA — Phase 2 | Disable in the channel picker |
 | `INVALID_CHANNEL` | 400 | Unknown channel | |
 | `INTERNAL_SERVER_ERROR` | 500 | Unhandled | Generic retry message |
@@ -151,7 +161,7 @@ Nineteen frames, in build order.
 | 16 | User Profile | `GET /auth/me`, `GET /kyc/status` | ⚠️ §4.10 |
 | 17 | Verify Account 1 | `POST /kyc/submit` | 🛑 **§4.5** |
 | 18 | Verify Account 2 | `POST /kyc/submit` | 🛑 **§4.5** |
-| 19 | *(Dashboard “Send” action)* | — | 🛑 **§4.2** |
+| 19 | *(Dashboard “Send” action)* | `POST /wallet/transfer` | ✅ **§11** |
 
 ✅ buildable as drawn · ⚠️ buildable with a documented adjustment · 🛑 blocked on backend work
 
@@ -440,7 +450,34 @@ immediately — to PIN setup or to Verify Account — without an extra round tri
 Access tokens last 30 minutes. On 401 `AUTHENTICATION_FAILED`, call
 `POST /auth/refresh` **once**; if that fails, clear credentials and return here.
 
+**Two 401s are not the same** (added 2026-09-13, session revocation):
+
+| `code` | Meaning | Client action |
+| --- | --- | --- |
+| `AUTHENTICATION_FAILED` | Token missing, malformed or expired | Refresh once; if the refresh also fails, clear and go to Login |
+| `SESSION_REVOKED` | The session was ended server-side — logout, admin suspension, or a password reset | **Do not retry or refresh.** Clear credentials and go to Login |
+
+Treating `SESSION_REVOKED` as a refreshable error turns a deliberate eviction
+into a refresh loop that cannot succeed.
+
 Store tokens in `flutter_secure_storage`, never `SharedPreferences`.
+
+### Logout
+
+`POST /api/v1/auth/logout` with the access token. No request body.
+
+```json
+{ "user_id": "...", "sessions_revoked": true, "token_version": 3 }
+```
+
+Clearing tokens locally is **not** logout — a refresh token left valid in an
+attacker's hands would keep minting access tokens for up to 7 days. Call this
+endpoint, and clear `flutter_secure_storage` whether it returns 200 or 401 (a
+401 here means the session was already ended).
+
+Revocation is **account-wide**: signing out on the phone also signs the user out
+on their other devices. Per-device logout is not implemented; do not offer a
+"log out other devices" control.
 
 **See §4.1 — the PIN-based login on this screen is not supported by the API.**
 
@@ -675,6 +712,15 @@ curl -X POST http://localhost:8000/api/v1/webhooks/mtn \
 provider-shaped payloads. Both are sandbox aids — real webhooks are HMAC-SHA256
 verified with anti-replay protection.
 
+**The simulator is only reachable when the backend runs in `TELCO_MODE=mock`,**
+which is the default for local development and CI. It is mounted nowhere else —
+not in sandbox (A5 verifies our integration against the operators' own sandboxes,
+and a local endpoint that settles without them would invalidate that evidence)
+and never in live. If `/api/v1/mock-telco/...` returns `404`, the backend you are
+pointed at is not running in mock mode; that is deliberate, not a bug. The same
+lockdown means a forged callback cannot settle anything in a real deployment
+(`403 SIMULATOR_DISABLED`).
+
 ---
 
 ## 10. Integration Checklist
@@ -703,8 +749,159 @@ verified with anti-replay protection.
 
 **Blocked pending backend decisions**
 - [ ] §4.1 PIN login + password reset
-- [ ] §4.2 P2P “Send”, bill payments, bank channel
+- [x] §4.2 P2P “Send” — shipped (`POST /wallet/transfer`, §11). Bill payments and the bank channel are still open.
 - [ ] §4.3 Notification categories and read state
 - [ ] §4.4 Referral code field
 - [ ] §4.5 KYC document/selfie upload
 - [ ] §4.7 Recipient name resolution
+
+---
+
+## 11. Transfers — sending money to a phone number
+
+`POST /api/v1/wallet/transfer` is the endpoint behind the dashboard's **Send**
+action. It is one customer intent with two possible outcomes, and the server
+decides which applies — do not try to predict it in the client.
+
+### Request
+
+```json
+{
+  "recipient_phone": "+237677998877",
+  "amount": 5000,
+  "pin": "1234",
+  "channel": "ORANGE",            // only needed for a non-PayDay recipient
+  "note": "Rent",                 // optional, max 140 chars, shown to both parties
+  "idempotency_key": "a-client-generated-uuid"
+}
+```
+
+`amount` is whole francs (`multiple_of` 1). `pin` is the transaction PIN
+(`POST /auth/set-pin`), not the account password.
+
+### What comes back — and what it means
+
+| Outcome | `type` | `channel` | `internal` | `status` | Fee |
+| --- | --- | --- | --- | --- | --- |
+| Recipient has a PayDay wallet | `TRANSFER` | `PAYDAY` | `true` | `SUCCESS` immediately | free |
+| Recipient has no wallet, `channel` supplied | `WITHDRAW` | `MTN`/`ORANGE` | `false` | `PROCESSING` | 1% (min 25 XAF) |
+
+Both are returned with HTTP **202** and the standard envelope. Render "sent
+instantly" when `internal` is true and "on its way via MTN" when it is not; in the
+second case the final state arrives through the usual transaction status flow
+(poll `GET /wallet/transactions/{id}` or use push).
+
+`direction` (`CREDIT`/`DEBIT`), `counterparty_msisdn_masked` (`+23767•••877`) and
+`transfer_group_id` are now on every transaction response, so history rows can
+show a signed amount and a counterparty without extra calls.
+
+### Rules the client should mirror
+
+* A recipient with a PayDay wallet is always credited internally, even if you send
+  `channel` — it is instant and free. Sending `channel` is harmless.
+* A recipient without one, and no `channel`, returns **`RECIPIENT_NOT_ON_PAYDAY`**
+  with `extra.suggested_channel`. That suggestion comes from the number's prefix
+  and is a *hint*: Cameroon has number portability, so ask the user to confirm the
+  network rather than sending to the suggestion automatically.
+* Sending money requires **verified KYC** (`KYC_REQUIRED`, 403) and a **set PIN**
+  (`PIN_NOT_SET`). Receiving does not — a pending user can still be paid.
+* Outgoing money counts against both the daily and the monthly limit, and the
+  credit side is checked against the wallet ceiling. A refusal moves nothing:
+  there is no state where the sender was debited and the recipient was not paid.
+* Always send `idempotency_key`. A retry with the same key returns the original
+  transfer instead of sending twice.
+
+### Money format reminder
+
+Amounts are whole francs as JSON numbers. Never format them with decimals for the
+wire, and never send a fractional amount — it is rejected with `VALIDATION_ERROR`.
+
+---
+
+## 13. Client behaviour on Cameroonian networks (Flutter)
+
+Most of this app's users are on older Android devices, metered data and networks that drop
+mid-request. That is a product constraint, not an edge case, and it changes the rules for a
+money client: **reads may be stale, writes may never be guessed at.** The rules below are
+requirements, not suggestions — each one prevents a class of "the app told me something that
+was not true" bug.
+
+### 13.1 Never show success the server did not confirm
+
+There is no optimistic success anywhere in the money path. A transfer, deposit or withdrawal
+shows as pending until a response says otherwise:
+
+| What you got back | What the screen must say |
+| --- | --- |
+| `200`/`202` with `status: SUCCESS` | Done, with the amount actually charged |
+| `202` with `status: PROCESSING` | **Pending, not failed** — "we are confirming with your operator" |
+| Timeout / connection lost | **Unknown** — "we could not confirm; check history" and re-poll |
+| `4xx` with an error code | Failed, with the code's message (see §2) |
+
+The dangerous mistake is treating a timeout as failure. A withdrawal can be PROCESSING at
+the operator while the client's socket dies; showing "failed" invites the user to try again,
+and a customer who pays twice is a support incident with our name on it.
+
+### 13.2 Retries: one key, one payment
+
+* Send `idempotency_key` on **every** money request (§1).
+* Retry the *same* request with the *same* key. Never generate a new key for a retry — that
+  is a second payment, not a retry.
+* On `PROCESSING`, do not resubmit at all: poll the transaction instead.
+* Retry on network errors and `5xx` only; a `4xx` is a decision, not a hiccup.
+
+### 13.3 Polling, not sockets
+
+Poll `GET /api/v1/wallet/transactions/{transaction_id}` until the status is terminal
+(`SUCCESS`, `FAILED`, `REVERSED`):
+
+* back off — start at ~2s, double to a ~30s ceiling, stop after ~2 minutes and tell the user
+  to check history (the backend's sweep keeps working after you stop asking);
+* respect `Retry-After` when present; the API rate-limits per account and a hot loop will be
+  throttled;
+* do not open a websocket for this. It costs battery and data on the devices our users
+  actually have, and the status changes are not real-time-critical.
+
+### 13.4 Offline: reads may be cached, writes may not be queued
+
+* **Never queue a money write for later.** An outbox that fires a payment when the phone
+  finds signal hours later is a payment the user no longer expects. Money writes require a
+  live request (and the PIN entry that goes with it).
+* Reads (`balance`, recent transactions, fee tables) may be cached **with an explicit
+  "as of HH:MM" label**, and must be refreshed before any money decision — never let a cached
+  balance gate a transfer amount.
+* If the app is offline, say so and disable the action; do not spin forever.
+
+### 13.5 Payload discipline (costs the user money)
+
+* Use `page_size` (max 100) and paginate; never fetch the whole history to show five rows.
+* Prefer `GET /api/v1/wallet/transactions/{id}` over re-listing to watch one payment.
+* Don't poll the balance on a timer; fetch on screen entry and after an action.
+* Cache static assets (icons, fonts, fee tables) on-device — they are the cheap part.
+* Do **not** build a local cache of balances that survives app restarts and is shown as
+  current. A stale balance with no timestamp is worse than a spinner.
+
+### 13.6 On-device expectations
+
+* Support older Android versions and low-RAM devices; avoid heavy background work.
+* French and English from the same build (see §1 conventions) — amounts and dates as agreed
+  there; phone numbers always displayed in local `6XX XXX XXX` form.
+* The PIN pad must work one-handed on a small screen; biometrics (if added) are a convenience
+  layer, never the only path, and never a substitute for the PIN the server verifies.
+
+### 13.7 Admin: operation visibility
+
+The Angular admin portal has `GET /api/v1/admin/ops/overview` for the on-call screen:
+
+* `stuck_processing` — transactions in PROCESSING longer than the sweep's window, with the
+  age of the oldest. Non-zero means money is waiting and the operator has not confirmed; this
+  is the number to put on a dashboard.
+* `transactions_by_channel` — so a single broken operator is visible instead of hidden inside
+  a healthy overall rate.
+* `sweep` — whether the safety net that clears lost callbacks is switched on, with its
+  interval and batch size. An environment running without it is a misconfiguration, not a
+  variant.
+
+The endpoint accepts `stuck_after_seconds` (60–86400) to inspect a different window; the
+default comes from `OPS_STUCK_PROCESSING_SECONDS` (900s).
+

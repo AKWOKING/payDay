@@ -1,7 +1,15 @@
 # PayDay — CI/CD Pipeline Strategy
 
-**Version:** 1.0 · **Date:** 2026-09-07
+**Version:** 1.1 · **Date:** 2026-09-07
 **Applies to:** `AKWOKING/payDay` backend (FastAPI / SQLAlchemy 2.0 / PostgreSQL 15)
+
+> **Status.** The four workflow files under `.github/workflows/` are present in
+> the repository but have **never been pushed or run**: the GitHub connection
+> lacks the `workflows` scope (roadmap risk R8), and pushes containing
+> `.github/workflows/` are rejected wholesale. They were reconstructed from
+> this document on 2026-09-07 after the previous session's copy was lost in a
+> sandbox re-clone. The strategy below remains the specification; nothing in
+> it is verified by a green GitHub Actions run yet.
 
 ---
 
@@ -34,8 +42,11 @@ the rollout; `@sha256:…` cannot.
 Four parallel jobs:
 
 ### `test`
-Installs with `pip install -e ".[dev]"` and runs the full suite (101 tests),
-uploading a JUnit report.
+Installs with `pip install -e ".[dev]"` and runs the full suite (121 tests as of
+2026-09-07), uploading a JUnit report. A `redis:7` service container is started
+and `PAYDAY_TEST_REDIS_URL=redis://localhost:6379/0` is exported so the
+real-Redis integration tests (`tests/test_sprint5_shared_infrastructure.py`)
+run against actual Redis instead of skipping.
 
 ### `migrations-postgres`
 The suite runs on SQLite; production is PostgreSQL. This job closes that gap

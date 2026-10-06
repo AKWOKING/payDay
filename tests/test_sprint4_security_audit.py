@@ -149,9 +149,12 @@ async def test_user_cannot_read_another_users_transaction(
     )
     await db_session.commit()
 
-    victim_headers = {
-        "Authorization": f"Bearer {create_access_token(subject=victim.user_id, role=victim.role.value)}"
-    }
+    victim_token = create_access_token(
+        subject=victim.user_id,
+        role=victim.role.value,
+        token_version=victim.token_version,
+    )
+    victim_headers = {"Authorization": f"Bearer {victim_token}"}
 
     created = await client.post(
         "/api/v1/wallet/deposit",

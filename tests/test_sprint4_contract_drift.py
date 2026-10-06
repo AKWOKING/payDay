@@ -28,7 +28,10 @@ BASELINE_PATH = Path(__file__).resolve().parents[1] / "docs" / "api" / "openapi-
 # Endpoints intentionally reachable without a bearer token.
 PUBLIC_PATHS = {
     "/",
+    # Probes are called by load balancers and orchestrators, which hold no JWT.
     "/api/v1/public/health",
+    "/api/v1/public/health/live",
+    "/api/v1/public/health/ready",
     "/api/v1/public/info",
     "/api/v1/public/fee-calculator",
     "/api/v1/auth/login",

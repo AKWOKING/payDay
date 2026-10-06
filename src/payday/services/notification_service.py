@@ -5,7 +5,12 @@ from sqlalchemy.future import select
 from sqlalchemy import func
 
 from payday.models.notification import Notification, NotificationChannel, NotificationStatus
-from payday.models.transaction import Transaction, TransactionType, TransactionStatus
+from payday.models.transaction import (
+    Transaction,
+    TransactionDirection,
+    TransactionStatus,
+    TransactionType,
+)
 from payday.models.user import User
 from payday.core.logging import logger
 
@@ -31,17 +36,29 @@ class NotificationService:
         amount_fmt = f"{float(transaction.amount):,.2f}"
         net_fmt = f"{float(transaction.net_amount):,.2f}"
 
+        counterparty = transaction.counterparty_msisdn_masked or "the recipient"
+
         if transaction.status == TransactionStatus.SUCCESS:
             if transaction.type == TransactionType.DEPOSIT:
                 bal_msg = f" New balance: {current_balance:,.2f} XAF." if current_balance is not None else ""
                 msg = f"PayDay: Your deposit of {amount_fmt} XAF via {tx_channel} succeeded (Net credited: {net_fmt} XAF).{bal_msg} Ref: {transaction.external_ref or transaction.transaction_id[:8]}"
+            elif transaction.type == TransactionType.TRANSFER:
+                # Two legs, two audiences: without this, both parties were told
+                # they had made a "withdrawal" -- alarming and simply wrong.
+                bal_msg = f" New balance: {current_balance:,.2f} XAF." if current_balance is not None else ""
+                if transaction.direction == TransactionDirection.CREDIT:
+                    msg = f"PayDay: You received {amount_fmt} XAF from {counterparty}.{bal_msg} Ref: {transaction.transaction_id[:8]}"
+                else:
+                    msg = f"PayDay: You sent {amount_fmt} XAF to {counterparty}.{bal_msg} Ref: {transaction.transaction_id[:8]}"
             else:
                 msg = f"PayDay: Your withdrawal of {amount_fmt} XAF via {tx_channel} was successfully transferred. Ref: {transaction.external_ref or transaction.transaction_id[:8]}"
         elif transaction.status == TransactionStatus.FAILED:
             reason = transaction.failure_reason or "Declined by operator"
-            msg = f"PayDay: Your {tx_type.lower()} of {amount_fmt} XAF via {tx_channel} was unsuccessful. Reason: {reason}"
+            action = "transfer" if transaction.type == TransactionType.TRANSFER else tx_type.lower()
+            msg = f"PayDay: Your {action} of {amount_fmt} XAF via {tx_channel} was unsuccessful. Reason: {reason}"
         elif transaction.status == TransactionStatus.PROCESSING:
-            msg = f"PayDay: Your {tx_type.lower()} of {amount_fmt} XAF via {tx_channel} is processing. Please confirm the prompt on your phone."
+            action = "transfer" if transaction.type == TransactionType.TRANSFER else tx_type.lower()
+            msg = f"PayDay: Your {action} of {amount_fmt} XAF via {tx_channel} is processing. Please confirm the prompt on your phone."
         else:
             msg = f"PayDay: Transaction status update for ref {transaction.transaction_id[:8]}: {transaction.status.value}."
 

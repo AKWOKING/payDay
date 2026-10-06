@@ -1,82 +1,344 @@
-import uuid
+"""Orange Money adapter (Cameroon) — Web Payment (collection) & Payout.
+
+Rewritten in M1. Reconnaissance (`docs/plans/M1_LIVE_MONEY_PATH_PLAN.md` §2)
+found four defects that would each have broken every live call:
+
+- the OAuth request went to `{base_url}/oauth/token`, but Orange's token service
+  lives on a **different host** (`https://api.orange.com/oauth/v3/token`) than
+  the Web Payment API;
+- the `Authorization` header was assembled as `Basic {client_id}:{client_secret}`
+  — not base64-encoded, therefore not a valid Basic credential. Orange also
+  supports (and often issues) a ready-made Authorization value, which is now
+  preferred when configured;
+- `notif_url` was `f"{settings.API_V1_STR}/webhooks/orange"` — a *relative path*.
+  Orange cannot call `/api/v1/webhooks/orange`; the absolute URL now comes from
+  `PUBLIC_BASE_URL`;
+- amounts were sent as `int(amount)`, **truncating** sub-franc requests
+  (`Decimal("1000.99")` → `1000`) while the ledger credited `995.99` net.
+
+Money is whole francs (`core.money`), the amount is sent as the JSON number its
+documented examples use, and the MSISDN is the 9-digit national form Orange
+Money's merchant documentation describes for `subscriber_msisdn`.
+
+**Unverified contracts** (flagged rather than guessed): Orange's `amount` type
+appears both as a number and as a string across published versions, and its
+status path differs between API generations — the API is mid-migration. Both are
+pinned below by golden tests and must be confirmed against the live sandbox in
+task A5. The payout endpoint is likewise unverified pending operator
+documentation.
+"""
+from __future__ import annotations
+
+import base64
 import hmac
-import hashlib
-from typing import Dict, Any, Optional
+import time
+import uuid
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Any, Dict, Optional
+
 import httpx
-from payday.core.config import settings
-from payday.core.logging import logger
+
 from payday.adapters.base import (
-    PaymentChannelAdapter,
     ChannelDepositRequest,
-    ChannelWithdrawalRequest,
     ChannelResponse,
+    ChannelWithdrawalRequest,
+    PaymentChannelAdapter,
+    ProviderCallback,
 )
+from payday.core.config import Settings, settings
+from payday.core.exceptions import PayDayException
+from payday.core.logging import logger
+from payday.core.money import to_wire_amount
+from payday.core.msisdn import format_for_operator, operator_for
+
+PROVIDER = "ORANGE"
+
+#: Orange acknowledges a payment initiation with 201 Created (200/202 tolerated).
+ACCEPTED = (200, 201, 202)
+
+
+@dataclass(frozen=True)
+class OrangeConfig:
+    """Resolved Orange configuration."""
+
+    base_url: str = ""
+    token_url: str = "https://api.orange.com/oauth/v3/token"
+    auth_header: str = ""
+    client_id: str = ""
+    client_secret: str = ""
+    merchant_key: str = ""
+    notification_url: str = ""
+    status_path: str = "transactionstatus"
+    payout_path: str = "payout"
+    timeout_seconds: float = 15.0
+    token_refresh_skew_seconds: int = 300
+    strict_operator_prefix: bool = False
+
+    @classmethod
+    def from_settings(cls, s: Optional[Settings] = None) -> "OrangeConfig":
+        s = s or settings
+        return cls(
+            base_url=s.orange_base_url,
+            token_url=s.ORANGE_TOKEN_URL,
+            auth_header=s.ORANGE_AUTH_HEADER,
+            client_id=s.ORANGE_CLIENT_ID,
+            client_secret=s.ORANGE_CLIENT_SECRET,
+            merchant_key=s.ORANGE_MERCHANT_KEY,
+            notification_url=s.orange_notification_url(),
+            status_path=s.ORANGE_STATUS_PATH,
+            payout_path=s.ORANGE_PAYOUT_PATH,
+            timeout_seconds=s.TELCO_HTTP_TIMEOUT_SECONDS,
+            token_refresh_skew_seconds=s.TELCO_TOKEN_REFRESH_SKEW_SECONDS,
+            strict_operator_prefix=s.TELCO_STRICT_OPERATOR_PREFIX,
+        )
+
+    def basic_auth_header(self) -> str:
+        """The Authorization value for the token request.
+
+        Orange may hand over a complete value (typically `Basic <base64>`), in
+        which case it is used verbatim. Otherwise the credential pair is
+        base64-encoded properly — the previous implementation sent the raw
+        `id:secret` pair, which is not valid Basic auth.
+        """
+        if self.auth_header:
+            return self.auth_header
+        raw = f"{self.client_id}:{self.client_secret}".encode("utf-8")
+        return "Basic " + base64.b64encode(raw).decode("ascii")
+
+
+# --------------------------------------------------------------------------- #
+# Pure helpers — asserted directly by the golden-payload tests
+# --------------------------------------------------------------------------- #
+def build_webpayment_payload(
+    *,
+    config: OrangeConfig,
+    amount: Any,
+    currency: str,
+    order_id: str,
+    reference: str,
+) -> Dict[str, Any]:
+    """The exact body of `POST {base}/webpayment` (collection).
+
+    Only fields documented across Orange's own merchant documentation are sent;
+    `notif_url` is absolute. Orange's documented `amount` type is ambiguous
+    (number vs string) — numeric is pinned here and confirmed in sandbox (A5).
+    """
+    return {
+        "merchant_key": config.merchant_key,
+        "currency": currency,
+        "order_id": order_id,
+        "amount": to_wire_amount(amount),
+        "reference": reference,
+        "notif_url": config.notification_url,
+        "lang": "fr",
+    }
+
+
+def build_payout_payload(
+    *,
+    config: OrangeConfig,
+    amount: Any,
+    payout_id: str,
+    destination_phone: str,
+    currency: str,
+) -> Dict[str, Any]:
+    """Body of the merchant payout (disbursement) request.
+
+    The payout contract is **not verified** against Orange documentation in this
+    step — see the module docstring and task A5.
+    """
+    return {
+        "merchant_key": config.merchant_key,
+        "currency": currency,
+        "payout_id": payout_id,
+        "amount": to_wire_amount(amount),
+        "recipient_msisdn": format_for_operator(destination_phone, PROVIDER),
+    }
+
+
+def parse_callback(body: Dict[str, Any]) -> Optional[ProviderCallback]:
+    """Translate an Orange Money notification, or `None` if it is not one.
+
+    Orange sends **three fields and nothing else**::
+
+        {"status": "SUCCESS", "notif_token": "dd497bda...", "txnid": "MP150709.1341.A00073"}
+
+    There is no order id, no amount and no reference, which is why the
+    `notif_token` returned at initiation must be stored: it is the only value
+    that ties a notification to an order. A body without it is not an Orange
+    notification and is refused rather than guessed at.
+    """
+    if not isinstance(body, dict):
+        return None
+
+    notif_token = body.get("notif_token")
+    if not notif_token:
+        return None
+
+    status = body.get("status")
+    txnid = body.get("txnid")
+    return ProviderCallback(
+        provider_status=str(status) if status is not None else None,
+        provider_txn_id=str(txnid) if txnid else None,
+        notif_token=str(notif_token),
+        raw=body,
+    )
+
+
+def map_status(payload: Dict[str, Any]) -> str:
+    """Map an Orange status value onto our four-state vocabulary.
+
+    Documented vocabulary: `INITIATED` (customer has not acted), `PENDING`
+    (customer confirmed, Orange is processing), `SUCCESS`, `FAILED`, `EXPIRED`
+    (confirmed too late). Only the last three are conclusive; the first two must
+    leave the transaction untouched.
+    """
+    status = str(payload.get("status") or "").upper()
+    if status in {"SUCCESS", "SUCCESSFUL", "COMPLETED"}:
+        return "SUCCESS"
+    if status in {"FAILED", "EXPIRED", "REJECTED", "CANCELLED", "CANCELED"}:
+        return "FAILED"
+    return "PROCESSING"
+
+
+def warn_if_operator_mismatch(phone_number: str, strict: bool) -> None:
+    """See `mtn_momo.warn_if_operator_mismatch` — advisory by default."""
+    actual = operator_for(phone_number)
+    if actual is None or actual == PROVIDER:
+        return
+    message = (
+        f"{PROVIDER} request carries a number whose prefix is allocated to "
+        f"{actual} ({phone_number}). Mobile money may still succeed if the number "
+        "was ported."
+    )
+    if strict:
+        raise PayDayException(
+            status_code=400,
+            detail=(
+                f"This number appears to belong to {actual}, not Orange Money. "
+                f"Choose the {actual} channel, or disable TELCO_STRICT_OPERATOR_PREFIX."
+            ),
+            code="PHONE_OPERATOR_MISMATCH",
+            title="Operator Mismatch",
+        )
+    logger.warning(f"[Orange Money] {message}")
 
 
 class OrangeMoneyAdapter(PaymentChannelAdapter):
-    """
-    Orange Money Adapter (Cameroon)
-    Implements Orange Money Web Payment API (Collection) & Merchant Payout API (Disbursement).
-    Includes built-in Mock Sandbox mode for offline development and CI/CD pipelines.
-    """
+    """Orange Money (Cameroon) — Web Payment & merchant payout."""
 
     def __init__(
         self,
-        base_url: Optional[str] = None,
-        client_id: Optional[str] = None,
-        client_secret: Optional[str] = None,
-        merchant_key: Optional[str] = None,
-        target_env: str = "sandbox",
-        use_mock: bool = True,
+        config: Optional[OrangeConfig] = None,
+        use_mock: Optional[bool] = None,
+        clock=time.monotonic,
     ):
-        self.base_url = base_url or "https://api.orange.cm/orange-money-webpay/dev/v1"
-        self.client_id = client_id or "mock-om-client-id"
-        self.client_secret = client_secret or "mock-om-client-secret"
-        self.merchant_key = merchant_key or "mock-om-merchant-key"
-        self.target_env = target_env
-        self.use_mock = use_mock
-        self._cached_token: Optional[str] = None
-
-    def _clean_msisdn(self, phone: str) -> str:
-        """Extracts national digits without '+' for Orange Money API."""
-        return phone.replace("+", "").strip()
+        self.config = config if config is not None else OrangeConfig.from_settings()
+        self.use_mock = (
+            use_mock if use_mock is not None else settings.TELCO_MODE == "mock"
+        )
+        self._clock = clock
+        self._token: Optional[tuple[str, float]] = None
+        # Backwards-compatible aliases.
+        self.base_url = self.config.base_url
+        self.merchant_key = self.config.merchant_key
+        self.client_id = self.config.client_id
+        self.client_secret = self.config.client_secret
 
     async def _get_auth_token(self) -> str:
-        """Retrieves or refreshes OAuth2 token from Orange Money Gateway."""
+        """OAuth2 client-credentials token, refreshed before it expires."""
         if self.use_mock:
-            return "mock-orange-oauth2-token-valid"
+            return f"mock-{PROVIDER.lower()}-oauth2-token-valid"
 
-        if self._cached_token:
-            return self._cached_token
+        if self._token and self._clock() < self._token[1]:
+            return self._token[0]
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            headers = {
-                "Authorization": f"Basic {self.client_id}:{self.client_secret}",
-                "Content-Type": "application/x-www-form-urlencoded",
-            }
+        if not (self.config.auth_header or (self.config.client_id and self.config.client_secret)):
+            raise PayDayException(
+                status_code=503,
+                detail=(
+                    "Orange Money credentials are not configured "
+                    "(ORANGE_AUTH_HEADER, or ORANGE_CLIENT_ID + ORANGE_CLIENT_SECRET)."
+                ),
+                code="TELCO_NOT_CONFIGURED",
+                title="Payment Channel Unavailable",
+            )
+
+        async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
             response = await client.post(
-                f"{self.base_url}/oauth/token",
-                headers=headers,
+                self.config.token_url,
+                headers={
+                    "Authorization": self.config.basic_auth_header(),
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
                 data={"grant_type": "client_credentials"},
             )
-            if response.status_code == 200:
-                token_data = response.json()
-                self._cached_token = token_data.get("access_token")
-                return self._cached_token
-            raise Exception(f"Failed to authenticate with Orange Money API: {response.text}")
+        if response.status_code != 200:
+            raise PayDayException(
+                status_code=502,
+                detail=f"Orange Money authentication failed ({response.status_code}).",
+                code="TELCO_AUTH_FAILED",
+                title="Payment Channel Error",
+            )
+
+        data = response.json()
+        token = data.get("access_token")
+        if not token:
+            raise PayDayException(
+                status_code=502,
+                detail="Orange Money authentication response contained no access_token.",
+                code="TELCO_AUTH_FAILED",
+                title="Payment Channel Error",
+            )
+        expires_in = int(data.get("expires_in") or 3600)
+        self._token = (
+            token,
+            self._clock() + max(1, expires_in - self.config.token_refresh_skew_seconds),
+        )
+        return token
+
+    async def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        json_body: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> httpx.Response:
+        """Send an authenticated request, retrying once if the token was stale."""
+        for attempt in (1, 2):
+            token = await self._get_auth_token()
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "X-Merchant-Key": self.config.merchant_key,
+                "Content-Type": "application/json",
+            }
+            async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
+                response = await client.request(
+                    method, url, headers=headers, json=json_body, params=params
+                )
+            if response.status_code != 401 or attempt == 2:
+                return response
+            logger.warning(
+                f"[Orange Money] 401 from {url}; discarding cached token and retrying once."
+            )
+            self._token = None
+        raise AssertionError("unreachable")  # pragma: no cover
 
     async def initiate_deposit(self, req: ChannelDepositRequest) -> ChannelResponse:
-        """
-        Dispatches Web Payment / Cash-In request to Orange Money gateway.
-        Generates payToken and pushes mobile payment prompt to customer.
-        """
+        """Web Payment: returns a pay_token (and payment_url where provided)."""
         order_id = f"OM-COL-{uuid.uuid4().hex[:10].upper()}"
-        msisdn = self._clean_msisdn(req.phone_number)
+        warn_if_operator_mismatch(req.phone_number, self.config.strict_operator_prefix)
 
-        logger.info(f"[Orange Money] Initiating Collection: {req.amount} XAF from {msisdn} (Order: {order_id})")
+        logger.info(
+            f"[Orange Money] Initiating Collection: {req.amount} XAF from "
+            f"{req.phone_number} (Order: {order_id})"
+        )
 
         if self.use_mock:
             channel_ref = f"OM-COL-{order_id[-8:]}"
+            notif_token = f"MOCK-NOTIF-{uuid.uuid4().hex[:16].upper()}"
             return ChannelResponse(
                 success=True,
                 channel_ref=channel_ref,
@@ -88,71 +350,71 @@ class OrangeMoneyAdapter(PaymentChannelAdapter):
                     "provider": "ORANGE",
                     "pay_token": f"PAY-TOKEN-{uuid.uuid4().hex[:12].upper()}",
                     "payment_url": f"https://mock-orange.cm/pay/{order_id}",
+                    "notif_token": notif_token,
                     "status": "PENDING_CUSTOMER_PIN",
                 },
+                provider_order_id=order_id,
+                provider_notif_token=notif_token,
             )
 
-        token = await self._get_auth_token()
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "X-Merchant-Key": self.merchant_key,
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "merchant_key": self.merchant_key,
-            "currency": req.currency,
-            "order_id": order_id,
-            "amount": int(req.amount),
-            "reference": req.transaction_id,
-            "subscriber_msisdn": msisdn,
-            "lang": "fr",
-            "notif_url": f"{settings.API_V1_STR}/webhooks/orange",
-            "description": req.description,
-        }
+        payload = build_webpayment_payload(
+            config=self.config,
+            amount=req.amount,
+            currency=req.currency,
+            order_id=order_id,
+            reference=req.transaction_id,
+        )
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            try:
-                response = await client.post(
-                    f"{self.base_url}/webpayment",
-                    headers=headers,
-                    json=payload,
-                )
-                if response.status_code in (200, 201, 202):
-                    data = response.json()
-                    pay_token = data.get("pay_token") or order_id
-                    return ChannelResponse(
-                        success=True,
-                        channel_ref=pay_token,
-                        status="PROCESSING",
-                        message="Web payment initialized successfully",
-                        raw_response=data,
-                    )
-                else:
-                    return ChannelResponse(
-                        success=False,
-                        status="FAILED",
-                        message=f"Orange Money API rejected collection: {response.text}",
-                        raw_response={"status_code": response.status_code, "body": response.text},
-                        error_code="ORANGE_COLLECTION_REJECTED",
-                    )
-            except Exception as e:
-                logger.error(f"[Orange Money] Network error initiating deposit: {e}")
-                return ChannelResponse(
-                    success=False,
-                    status="FAILED",
-                    message=f"Network error communicating with Orange Money: {str(e)}",
-                    error_code="ORANGE_CONNECTION_ERROR",
-                )
+        try:
+            response = await self._request(
+                "POST", f"{self.config.base_url}/webpayment", json_body=payload
+            )
+        except PayDayException:
+            raise
+        except Exception as exc:
+            logger.error(f"[Orange Money] Network error initiating deposit: {exc}")
+            return ChannelResponse(
+                success=False,
+                status="FAILED",
+                message=f"Network error communicating with {PROVIDER}: {exc}",
+                error_code="ORANGE_CONNECTION_ERROR",
+            )
+
+        if response.status_code in ACCEPTED:
+            data = response.json()
+            pay_token = data.get("pay_token") or order_id
+            return ChannelResponse(
+                success=True,
+                channel_ref=pay_token,
+                status="PROCESSING",
+                message="Web payment initialized successfully",
+                raw_response=data,
+                # Both are needed later: `order_id` to re-query the status
+                # endpoint, `notif_token` to recognise the notification. Until
+                # A8 they were discarded, which made an Orange callback
+                # impossible to match to an order.
+                provider_order_id=order_id,
+                provider_notif_token=data.get("notif_token"),
+            )
+        return ChannelResponse(
+            success=False,
+            status="FAILED",
+            message=f"Orange Money API rejected collection: {response.text}",
+            raw_response={"status_code": response.status_code, "body": response.text},
+            error_code="ORANGE_COLLECTION_REJECTED",
+        )
 
     async def initiate_withdrawal(self, req: ChannelWithdrawalRequest) -> ChannelResponse:
-        """
-        Dispatches Merchant Payout to Orange Money account.
-        Transfers funds directly to destination subscriber.
-        """
+        """Merchant payout to an Orange Money subscriber."""
         payout_id = f"OM-DISB-{uuid.uuid4().hex[:10].upper()}"
-        msisdn = self._clean_msisdn(req.destination_phone)
+        warn_if_operator_mismatch(
+            req.destination_phone, self.config.strict_operator_prefix
+        )
 
-        logger.info(f"[Orange Money] Initiating Payout: {req.amount} XAF to {msisdn} (Ref: {payout_id})")
+        logger.info(
+            f"[Orange Money] Initiating Payout: {req.amount} XAF to "
+            f"{req.destination_phone} (Ref: {payout_id})"
+        )
 
         if self.use_mock:
             channel_ref = f"OM-DISB-{payout_id[-8:]}"
@@ -169,56 +431,73 @@ class OrangeMoneyAdapter(PaymentChannelAdapter):
                 },
             )
 
-        token = await self._get_auth_token()
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "X-Merchant-Key": self.merchant_key,
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "merchant_key": self.merchant_key,
-            "currency": req.currency,
-            "payout_id": payout_id,
-            "amount": int(req.amount),
-            "recipient_msisdn": msisdn,
-            "description": req.description,
-        }
+        payload = build_payout_payload(
+            config=self.config,
+            amount=req.amount,
+            payout_id=payout_id,
+            destination_phone=req.destination_phone,
+            currency=req.currency,
+        )
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            try:
-                response = await client.post(
-                    f"{self.base_url}/payout",
-                    headers=headers,
-                    json=payload,
-                )
-                if response.status_code in (200, 201, 202):
-                    data = response.json()
-                    return ChannelResponse(
-                        success=True,
-                        channel_ref=payout_id,
-                        status="PROCESSING",
-                        message="Payout accepted by Orange Money gateway",
-                        raw_response=data,
-                    )
-                else:
-                    return ChannelResponse(
-                        success=False,
-                        status="FAILED",
-                        message=f"Orange Money Payout rejected: {response.text}",
-                        raw_response={"status_code": response.status_code, "body": response.text},
-                        error_code="ORANGE_PAYOUT_REJECTED",
-                    )
-            except Exception as e:
-                logger.error(f"[Orange Money] Network error initiating payout: {e}")
-                return ChannelResponse(
-                    success=False,
-                    status="FAILED",
-                    message=f"Network error communicating with Orange Money: {str(e)}",
-                    error_code="ORANGE_CONNECTION_ERROR",
-                )
+        try:
+            response = await self._request(
+                "POST",
+                f"{self.config.base_url}/{self.config.payout_path}",
+                json_body=payload,
+            )
+        except PayDayException:
+            raise
+        except Exception as exc:
+            logger.error(f"[Orange Money] Network error initiating payout: {exc}")
+            return ChannelResponse(
+                success=False,
+                status="FAILED",
+                message=f"Network error communicating with {PROVIDER}: {exc}",
+                error_code="ORANGE_CONNECTION_ERROR",
+            )
 
-    async def query_status(self, channel_ref: str, tx_type: str = "DEPOSIT") -> ChannelResponse:
-        """Inquires transaction state from Orange Money gateway."""
+        if response.status_code in ACCEPTED:
+            return ChannelResponse(
+                success=True,
+                channel_ref=payout_id,
+                status="PROCESSING",
+                message="Payout accepted by Orange Money gateway",
+                raw_response=response.json() if response.content else {},
+            )
+        return ChannelResponse(
+            success=False,
+            status="FAILED",
+            message=f"Orange Money Payout rejected: {response.text}",
+            raw_response={"status_code": response.status_code, "body": response.text},
+            error_code="ORANGE_PAYOUT_REJECTED",
+        )
+
+    async def query_status(
+        self,
+        channel_ref: str,
+        tx_type: str = "DEPOSIT",
+        order_id: Optional[str] = None,
+        amount: Optional[Decimal] = None,
+    ) -> ChannelResponse:
+        """Authoritative status lookup.
+
+        The documented contract is a **POST** to
+        `{base}/{ORANGE_STATUS_PATH}` — e.g.
+        `.../orange-money-webpay/cm/v1/transactionstatus` — carrying all three of
+        `{order_id, amount, pay_token}`, and answering
+        `{"status", "order_id", "txnid"}`. `pay_token` is what this codebase
+        stores as `external_ref`; `order_id` and `amount` come from the
+        transaction.
+
+        The path suffix stays configurable because Orange's API is mid-migration
+        and an older generation used `GET /paymentstatus/{payToken}`. That older
+        form differs in verb and body, not just suffix, so it is **not** covered
+        by configuration; if A5 finds it is the contracted generation, this
+        method needs changing. Recorded rather than hidden.
+
+        Orange's documented status response carries **no amount**, so the
+        settlement path cannot cross-check the paid amount for this channel.
+        """
         if self.use_mock:
             return ChannelResponse(
                 success=True,
@@ -227,57 +506,106 @@ class OrangeMoneyAdapter(PaymentChannelAdapter):
                 message="Mock Orange Money transaction confirmed successful",
             )
 
-        token = await self._get_auth_token()
-        endpoint = "transactionstatus" if tx_type == "DEPOSIT" else "payoutstatus"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "X-Merchant-Key": self.merchant_key,
-        }
-
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"{self.base_url}/{endpoint}/{channel_ref}", headers=headers)
-            if response.status_code == 200:
-                data = response.json()
-                om_status = data.get("status")
-                final_status = "SUCCESS" if om_status in ("SUCCESSFUL", "SUCCESS") else ("FAILED" if om_status in ("FAILED", "EXPIRED") else "PROCESSING")
-                return ChannelResponse(
-                    success=(final_status == "SUCCESS"),
-                    channel_ref=channel_ref,
-                    status=final_status,
-                    raw_response=data,
-                )
+        if order_id is None or amount is None:
+            # Without both, the documented contract cannot be satisfied. Sending a
+            # partial body would get a 4xx that looks like a network problem, so
+            # fail loudly and leave the transaction alone instead.
             return ChannelResponse(
                 success=False,
                 channel_ref=channel_ref,
-                status="FAILED",
-                message=f"Orange status query failed with code {response.status_code}",
+                status="PROCESSING",
+                message=(
+                    "Orange status query needs order_id and amount; the "
+                    "transaction does not carry them, so the status is unknown."
+                ),
             )
 
+        endpoint = (
+            self.config.status_path
+            if tx_type == "DEPOSIT"
+            else f"{self.config.payout_path}status"
+        )
+        response = await self._request(
+            "POST",
+            f"{self.config.base_url}/{endpoint}",
+            json_body={
+                "order_id": order_id,
+                "amount": to_wire_amount(amount),
+                "pay_token": channel_ref,
+            },
+        )
+        if response.status_code == 200:
+            data = response.json()
+            status = map_status(data)
+            txnid = data.get("txnid")
+            return ChannelResponse(
+                success=(status in {"SUCCESS", "FAILED"}),
+                channel_ref=channel_ref,
+                status=status,
+                message=f"Orange reports {data.get('status')}",
+                raw_response=data,
+                provider_order_id=data.get("order_id") or order_id,
+                provider_txn_id=str(txnid) if txnid else None,
+            )
+        return ChannelResponse(
+            success=False,
+            channel_ref=channel_ref,
+            status="PROCESSING",
+            message=f"Status query was inconclusive (HTTP {response.status_code})",
+            raw_response={"status_code": response.status_code, "body": response.text},
+        )
+
+    def verify_callback_authenticity(
+        self, callback: ProviderCallback, expected_notif_token: Optional[str]
+    ) -> bool:
+        """Constant-time comparison of the echoed `notif_token`.
+
+        This is the control Orange documents: the `notif_token` issued at
+        initiation and echoed in the notification is the only evidence that a
+        notification belongs to an order. `hmac.compare_digest` is used so the
+        comparison does not leak the token through timing.
+        """
+        if not expected_notif_token or not callback.notif_token:
+            return False
+        return hmac.compare_digest(str(expected_notif_token), str(callback.notif_token))
+
     async def verify_webhook_signature(self, headers: Dict[str, str], body: bytes) -> bool:
+        """Whether an inbound Orange callback may be trusted.
+
+        Orange's newer API returns a `notif_token` at initiation and echoes it in
+        the notification; verifying that is task A8 (it needs per-order token
+        storage). Until then, live callbacks are **rejected rather than trusted**
+        — an unauthenticated POST must never be able to credit a wallet — and
+        `validate_telco_configuration` refuses to start in live mode.
+
+        Mock-mode keyword behaviour is preserved for the existing suite.
         """
-        Verifies HMAC signature or authorization token on incoming Orange Money webhooks/IPN.
-        Rejects missing, forged, or invalid signatures.
-        """
-        normalized_headers = {k.lower(): v for k, v in headers.items()}
+        normalized = {k.lower(): v for k, v in headers.items()}
         signature = (
-            normalized_headers.get("x-orange-signature")
-            or normalized_headers.get("x-signature")
-            or normalized_headers.get("authorization")
+            normalized.get("x-orange-signature")
+            or normalized.get("x-signature")
+            or normalized.get("authorization")
         )
 
         if self.use_mock:
-            if signature and any(s in signature.lower() for s in ["invalid", "spoofed", "bad", "forged"]):
+            if signature and any(
+                token in signature.lower()
+                for token in ("invalid", "spoofed", "bad", "forged")
+            ):
                 return False
             return True
 
-        if not signature:
-            return False
-
-        if self.client_secret and self.client_secret != "mock-om-client-secret":
-            expected_hmac = hmac.new(self.client_secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
-            return hmac.compare_digest(signature, expected_hmac)
-
-        return True
+        logger.error(
+            "[Orange Money] Callback received but notif_token verification "
+            "(M1 task A8) is not implemented; rejecting to avoid crediting a "
+            "wallet from an unauthenticated request."
+        )
+        return False
 
 
-orange_money_adapter = OrangeMoneyAdapter(use_mock=True)
+def build_orange_adapter(use_mock: Optional[bool] = None) -> OrangeMoneyAdapter:
+    """Construct the adapter from current settings."""
+    return OrangeMoneyAdapter(config=OrangeConfig.from_settings(), use_mock=use_mock)
+
+
+orange_money_adapter = build_orange_adapter()

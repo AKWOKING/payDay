@@ -43,6 +43,25 @@ class AuthenticationError(PayDayException):
         )
 
 
+class SessionRevokedError(PayDayException):
+    """401 — the token was minted before the account's last session revocation.
+
+    Deliberately distinct from `AuthenticationError`: clients can then tell
+    "your session was ended deliberately, sign in again" (logout elsewhere,
+    admin suspension, password reset) from "this token expired", and support
+    can see which of the two actually happened.
+    """
+
+    def __init__(self, detail: str = "Session has been revoked. Please sign in again."):
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=detail,
+            code="SESSION_REVOKED",
+            title="Session Revoked",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
 class PermissionDeniedError(PayDayException):
     def __init__(self, detail: str = "You do not have permission to access this resource"):
         super().__init__(
@@ -159,6 +178,65 @@ class KycRequiredError(PayDayException):
         )
 
 
+class BalanceCeilingExceededError(PayDayException):
+    """A credit would push a wallet past its maximum stored value.
+
+    E-money wallets have a ceiling. The published figure and the enforced one
+    must be the same number, so the error names the ceiling rather than saying
+    "limit exceeded" and leaving support to guess which limit.
+    """
+
+    def __init__(self, ceiling: float, current_balance: float, attempted_credit: float):
+        super().__init__(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"This wallet cannot hold more than {ceiling:,.0f} XAF. "
+                f"Balance {current_balance:,.0f} XAF + {attempted_credit:,.0f} XAF "
+                f"would exceed it."
+            ),
+            code="BALANCE_CEILING_EXCEEDED",
+            title="Wallet Balance Ceiling Reached",
+            extra={
+                "ceiling": ceiling,
+                "current_balance": current_balance,
+                "attempted_credit": attempted_credit,
+            },
+        )
+
+
+class RecipientNotFoundError(PayDayException):
+    """The transfer recipient is not a PayDay user (and no channel was given)."""
+
+    def __init__(self, recipient: str, suggested_channel: Optional[str] = None):
+        hint = (
+            f" Supply channel={suggested_channel} to send to their mobile money "
+            f"account instead."
+            if suggested_channel
+            else " Supply a channel to send to their mobile money account instead."
+        )
+        super().__init__(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"{recipient} does not have a PayDay wallet.{hint} The channel is a "
+                "hint: numbers can be ported between operators, so the sender must "
+                "choose it."
+            ),
+            code="RECIPIENT_NOT_ON_PAYDAY",
+            title="Recipient Not Found",
+            extra={"suggested_channel": suggested_channel},
+        )
+
+
+class SelfTransferError(PayDayException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot send money to your own wallet.",
+            code="SELF_TRANSFER",
+            title="Invalid Recipient",
+        )
+
+
 class DuplicateTransactionError(PayDayException):
     def __init__(self, idempotency_key: str):
         super().__init__(
@@ -177,4 +255,31 @@ class InvalidStateTransitionError(PayDayException):
             code="INVALID_STATE_TRANSITION",
             title="Invalid State Transition",
             extra={"current_status": current_status, "target_status": target_status},
+        )
+
+
+class RateLimitError(PayDayException):
+    """429 — WS-3 / LB-6: an authentication endpoint was hit too often."""
+
+    def __init__(self, limit: int, retry_after: int):
+        super().__init__(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many requests. Try again in {max(1, retry_after)} seconds.",
+            code="RATE_LIMITED",
+            title="Rate Limit Exceeded",
+            headers={"Retry-After": str(max(1, retry_after))},
+            extra={"limit": limit, "retry_after_seconds": max(1, retry_after)},
+        )
+
+
+class RedisUnavailableError(PayDayException):
+    """503 — the shared counter store is down; operations fail closed."""
+
+    def __init__(self, detail: str = "Shared state store is unavailable. Please retry later."):
+        super().__init__(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=detail,
+            code="REDIS_UNAVAILABLE",
+            title="Service Unavailable",
+            headers={"Retry-After": "5"},
         )

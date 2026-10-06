@@ -98,3 +98,25 @@ class AuditLogListResponse(BaseModel):
     page: int
     page_size: int
     items: List[AuditLogItemResponse]
+
+
+class StuckProcessingResponse(BaseModel):
+    """Transactions the sweep should have settled but has not."""
+
+    count: int
+    oldest_age_seconds: Optional[int] = None
+    threshold_seconds: int
+
+
+class OpsOverviewResponse(BaseModel):
+    """Read-only operational snapshot over the ledger (`/admin/ops/overview`)."""
+
+    environment: str
+    telco_mode: str
+    version: str
+    server_time: datetime
+    transactions_by_status: Dict[str, int]
+    transactions_by_channel: Dict[str, Dict[str, int]]
+    stuck_processing: StuckProcessingResponse
+    sweep: Dict[str, Any]
+
