@@ -341,7 +341,7 @@ These block work that cannot be done by writing code. Ordered by how much they u
 | 4 | **MTN sandbox credentials + Orange dev credentials + a public HTTPS callback URL** | Partner-portal work | A5 — the only thing that can confirm the operator contracts |
 | 5 | **SMS provider decision + sender ID registration** (MTN sender ID takes up to 3 weeks) | Procurement | WS-1, and OTP for password reset (LB-1) |
 | 6 | **KYC/IDV vendor decision + storage region** | Compliance | WS-6/LB-2, and mandatory app-store financial declaration |
-| 7 | **Licensing / custody route** — non-custodial, partner-of-record, or own agrément (research: `docs/research/API_ACCESS_MTN_OM_CAMEROON.md`) | Founders/board | Whether holding balances is permitted at all; shapes the ledger, float and the published product |
+| 7 | **Licensing / custody route** — partner-of-record recommended, with own agrément contingent on committed capital (research: `docs/research/API_ACCESS_MTN_OM_CAMEROON.md`; proposal: `docs/plans/CUSTODY_ROUTE_PROPOSAL.md`) | Founders/board | Whether holding balances is permitted at all; shapes the ledger, float and the published product |
 | 8 | **Staging target** (cloud account, region, Postgres/Redis) | Founders | M2, all deployment evidence, R8 |
 
 
@@ -390,6 +390,10 @@ Two consequences worth stating plainly:
 | D-37 | Scale-out, caching and service-extraction decisions are trigger-based, not aspirational | Engineering | `docs/design/INFRASTRUCTURE_SCALING_PLAN.md` §4–§5 |
 | D-38 | **Layer rules are executable**, not prose: `tests/test_architecture_layers.py` parses imports with `ast` and fails on an upward dependency | Engineering | **Decided & implemented**; the one exception (the webhook provider boundary) is asserted and must be deleted when no longer needed |
 | D-39 | Operational visibility is a first-class surface: `/admin/ops/overview` reports stuck PROCESSING, per-channel counts and sweep configuration | Product/engineering | **Implemented**; metrics scraping and alert routing remain open (LB-19) |
+| D-40 | **Interim revenue while custody matures**: agent/technology partner of a licensed institution, and/or white-label the platform to a licence-holder | Founders | Recommendation in `docs/plans/CUSTODY_ROUTE_PROPOSAL.md` §1; needed within 4 weeks |
+| D-41 | **File for the regulatory sandbox** when the reform text lands (first-category authorisation + 12-month sandbox) | CTO + counsel | The only mechanism that lets an unfunded startup run custodial features on real users with caps |
+| D-42 | **Contract non-negotiables**: data stays in-region and we keep defined export rights over the ledger and audit trail | Founders | Protects D6/D8 and prevents the platform becoming a sunk asset inside another's licence |
+| D-43 | **Payout controls (AML)**: verified-destination list, step-up for first-time recipients, per-user payout velocity limits, destination anomaly detection, documented AML programme | Product/engineering | **Open — LB-22**; required before real money and by any partner's compliance review |
 
 ---
 

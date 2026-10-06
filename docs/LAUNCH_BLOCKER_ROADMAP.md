@@ -202,6 +202,36 @@ deposit-fee half still needs a product decision (D-27).
 
 ---
 
+### LB-22 — found 2026-10-04 (custody route proposal)
+
+> **Open — must close before real money.** Decision D-43; context:
+> `docs/plans/CUSTODY_ROUTE_PROPOSAL.md` §4.
+
+**A wallet can pay out to any mobile number, verified or not, with no velocity control.**
+`WithdrawInitiateRequest.destination_phone` is free-form user input
+(`schemas/transaction.py:48`); the only checks are phone normalisation and an operator-prefix
+test in the adapter (`mtn_momo.py:451`, `orange_money.py:411`), after which the number is
+passed to the operator's disbursement call. Nothing binds the payout to the user's own
+verified account, and there is no limit on how many distinct destinations one user may pay,
+no step-up for a first-time recipient, and no detection of many users funding one number.
+
+This is the classic layering pattern (mule accounts, fan-out), and CEMAC is on the FATF grey
+list with ANIF requiring STRs within 48 hours. It also decides what we are: a payout to the
+user's own number is a wallet withdrawal; a payout to a third party is a **money-transfer
+service**, which is a regulated activity in its own right and must be covered by whatever
+licence or umbrella we operate under, and disclosed in the customer terms.
+
+Note what this means for planning: the *capability* already exists, so a non-custodial
+transfer product is not a code project — it is a permissions-and-controls project. That is
+why the custody proposal treats it as Track A, gated on contracts and counsel rather than on
+engineering.
+
+**To close:** the D-43 control set (verified destinations, first-recipient step-up, payout
+velocity limits separate from wallet limits, destination anomaly detection, operator
+name-match where available) plus the AML programme and customer-terms disclosure.
+
+---
+
 ### LB-20 — found 2026-10-04 (backend recommendation audit)
 
 > **Fixed 2026-10-04.** Regression net: `tests/test_simulator_lockdown.py`.
